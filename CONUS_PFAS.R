@@ -66,7 +66,7 @@ source_colors <- c(
   "Breitmeyer" = "green", "Camacho"    = "purple", "NH_DES"     = "cyan",
   "Maine"      = "pink", "WQP"        = "brown", "Hayworth"   = "yellow",
   "Dunn"       = "darkblue", "Forster"    = "darkgreen", "Penland"    = "darkred",
-  "Sims"       = "lightblue", "Webb"       = "magenta", "Labad"      = "grey",
+  "Sims"       = "steelblue", "Webb"       = "magenta", "Labad"      = "maroon",
   "CO_DPH"     = "forestgreen"
 )
 
@@ -122,43 +122,6 @@ theme_publication <- function(base_size = 11) {
       plot.margin       = margin(10, 14, 8, 10)
     )
 }
-
-theme_editorial <- function(base_size = 11) {
-  theme_classic(base_size = base_size) +
-    theme(
-      text              = element_text(family = "serif", color = "#2C2416"),
-      plot.background   = element_rect(fill = "#FAF7F2", color = NA),
-      panel.background  = element_rect(fill = "#FAF7F2", color = NA),
-      plot.title        = element_text(size = base_size + 2, face = "bold",
-                                       color = "#1A1208", margin = margin(b = 4)),
-      plot.subtitle     = element_text(size = base_size - 1, color = "#6B5E4A",
-                                       margin = margin(b = 10)),
-      plot.caption      = element_text(size = base_size - 2, color = "#9C8E7A",
-                                       hjust = 0),
-      axis.title        = element_text(size = base_size, color = "#2C2416"),
-      axis.text         = element_text(size = base_size - 1, color = "#4A3F30"),
-      axis.line         = element_line(color = "#8C7B6A", linewidth = 0.4),
-      axis.ticks        = element_line(color = "#8C7B6A", linewidth = 0.3),
-      axis.ticks.length = unit(2.5, "pt"),
-      panel.grid.major  = element_line(color = "#E8E0D4", linewidth = 0.3),
-      panel.grid.minor  = element_blank(),
-      panel.border      = element_blank(),
-      panel.spacing     = unit(10, "pt"),
-      legend.background = element_rect(fill = "#FAF7F2", color = NA),
-      legend.key        = element_rect(fill = "#FAF7F2", color = NA),
-      legend.title      = element_text(size = base_size - 1, face = "bold",
-                                       color = "#2C2416"),
-      legend.text       = element_text(size = base_size - 1, color = "#4A3F30"),
-      legend.position   = "right",
-      strip.background  = element_rect(fill = "#EDE5D8", color = "#C4B49A",
-                                       linewidth = 0.3),
-      strip.text        = element_text(size = base_size - 1, face = "bold",
-                                       color = "#2C2416",
-                                       margin = margin(4, 4, 4, 4)),
-      plot.margin       = margin(14, 16, 10, 12)
-    )
-}
-
 
 # loading PFAS data from my github url's
 load_dataset <- function(url, source_name) {
@@ -702,7 +665,7 @@ metrics_rf  <- extract_metrics_table(results_all_rf)
 metrics_xgb <- extract_metrics_table(results_all_xgb)
 metrics_BDL_rf  <- extract_metrics_table(results_all_rf)
 metrics_BDL_xgb <- extract_metrics_table(results_all_xgb)
-
+metrics_BDL_rf
 # side by side comparison
 metrics_combined <- metrics_rf %>%
   rename_with(~ paste0(.x, "_rf"),  -compound) %>%
@@ -719,10 +682,129 @@ metrics_combined <- metrics_rf %>%
 print(metrics_combined)
 
 
+detach("package:randomForest", unload = TRUE)
+# get top 3 compounds by R²
+top3 <- metrics_BDL_rf %>%  # or extract from cv_results
+  arrange(desc(r2)) %>%
+  slice(1:3) %>%
+  pull(compound)
+
+# build plot dataframe for top 3
+top3_df <- bind_rows(lapply(top3, function(cmp) {
+  r <- results_all_rf_BDL$cv_results[[cmp]]
+  thresh <- quantile(r$actual, 0.9, na.rm = TRUE)
+  data.frame(
+    compound  = cmp,
+    actual    = r$actual,
+    predicted = r$predicted,
+    r2        = round(r$r2, 2),
+    hotspot_acc = round(r$hotspot_acc, 3)
+  ) %>%
+    filter(!is.na(actual) & !is.na(predicted)) %>%
+    mutate(
+      hotspot_class = case_when(
+        actual >= thresh & predicted >= thresh ~ "True Hotspot",
+        actual < thresh  & predicted < thresh  ~ "True Non-Hotspot",
+        actual >= thresh & predicted < thresh  ~ "Missed Hotspot",
+        actual < thresh  & predicted >= thresh ~ "False Alarm"
+      ),
+      thresh = thresh
+    )
+}))
+
+# factor for ordering panels
+top3_df <- top3_df %>%
+  mutate(
+    compound = factor(compound, levels = top3),
+    hotspot_class = factor(hotspot_class,
+                           levels = c("True Hotspot", "True Non-Hotspot",
+                                      "Missed Hotspot", "False Alarm"))
+  )
+
+# label dataframe
+label_df_top3 <- top3_df %>%
+  group_by(compound, r2, hotspot_acc) %>%
+  summarise(
+    max_val = ceiling(max(c(actual, predicted))),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    label = paste0("R² = ", r2, "\nHotspot Acc = ", hotspot_acc)
+  )
+
+# anchor points for symmetric axes
+anchor_top3 <- label_df_top3 %>%
+  rowwise() %>%
+  do(data.frame(
+    compound     = .$compound,
+    actual       = c(0, .$max_val),
+    predicted    = c(0, .$max_val),
+    hotspot_class = NA_character_,
+    r2           = NA_real_,
+    hotspot_acc  = NA_real_,
+    thresh       = NA_real_
+  )) %>%
+  ungroup() %>%
+  mutate(compound = factor(compound, levels = top3),
+         hotspot_class = factor(hotspot_class,
+                                levels = c("True Hotspot", "True Non-Hotspot",
+                                           "Missed Hotspot", "False Alarm")))
+
+plot_df <- bind_rows(top3_df, anchor_top3)
+# convert hotspot_class to factor and drop NA level
+plot_df <- bind_rows(top3_df, anchor_top3) %>%
+  mutate(hotspot_class = factor(hotspot_class,
+                                levels = c("True Hotspot", "True Non-Hotspot",
+                                           "Missed Hotspot", "False Alarm"))) %>%
+  filter(!is.na(hotspot_class))  # remove anchor rows from legend
+
+p_hotspot <- ggplot(plot_df, aes(x = actual, y = predicted)) +
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed", linewidth = 0.5, color = "black") +
+  geom_point(aes(color = hotspot_class),
+             size = 2, alpha = 0.75, shape = 16,
+             na.rm = TRUE) +
+  geom_text(data = label_df_top3,
+            aes(x = 0, y = max_val * 0.97, label = label),
+            hjust = 0, vjust = 1, size = 4,
+            family = "serif", color = "black") +
+  scale_color_manual(
+    values = c("True Hotspot"     = "#8B0000",
+               "True Non-Hotspot" = "grey60",
+               "Missed Hotspot"   = "#E87D2B",
+               "False Alarm"      = "#2196C4"),
+    name = NULL,
+    na.value = NA
+  ) +
+  guides(color = guide_legend(
+    override.aes   = list(size = 4, alpha = 1),
+    na.translate   = FALSE
+  )) +
+  facet_wrap(~ compound, scales = "free", ncol = 3) +
+  labs(
+    title    = "Hotspot detection across top PFAS compounds",
+    subtitle = "10-fold CV | hotspot = top 10th percentile",
+    x        = "Observed log₁₀(concentration + 1) (ng/L)",
+    y        = "Predicted log₁₀(concentration + 1) (ng/L)"
+  ) +
+  theme_publication(base_size = 11) +
+  theme(
+    aspect.ratio    = 1,
+    legend.position = "bottom",
+    legend.key.size = unit(10, "pt"),
+    strip.text      = element_text(size = 11, face = "bold")
+  )
+p_hotspot
+
+ggsave("fig_hotspot_top3.png", p_hotspot,
+       width = 12, height = 5, dpi = 300, bg = "white")
 
 # plot stuff
 make_plots <- function(res) {
-  margin <- ggplot2::margin
+  if ("package:randomForest" %in% search()) {
+    detach("package:randomForest", unload = TRUE)
+  }#need to remove the random forest package before make_plots()
+  #because it conflicts with ggplot
   cv_results <- res$cv_results
   suffix     <- res$suffix
   modeled    <- names(cv_results)
@@ -800,6 +882,11 @@ make_plots <- function(res) {
     ungroup()
   
   all_pred_df_plot <- bind_rows(all_pred_df, anchor_df)
+  # order compounds by R²
+  compound_order <- perf_df %>% arrange(desc(R2)) %>% pull(compound)
+  
+  all_pred_df_plot <- all_pred_df_plot %>%
+    mutate(compound = factor(compound, levels = compound_order))
   
   label_df <- all_pred_df %>%
     group_by(compound, label) %>%
@@ -808,21 +895,23 @@ make_plots <- function(res) {
       y = max(max_val, na.rm = TRUE) * 0.97,
       .groups = "drop"
     )
+  label_df <- label_df %>%
+    mutate(compound = factor(compound, levels = compound_order))
   
   p_scatter <- ggplot(all_pred_df_plot, aes(x = actual, y = predicted)) +
     geom_abline(slope = 1, intercept = 0,
                 linetype = "dashed", linewidth = 0.5, color = "black") +
     geom_point(aes(color = source),
-               size = 1.4, alpha = 0.65, shape = 16,
+               size = 2.5, alpha = 0.65, shape = 16,
                na.rm = TRUE) +
     geom_text(data = label_df, aes(x = x, y = y, label = label),
-              hjust = 0, vjust = 1, size = 2.8,
+              hjust = 0, vjust = 1, size = 5,
               family = "serif", color = "black") +
     scale_color_manual(values = source_colors,
                        labels = source_labels,
                        name   = NULL,
                        na.value = NA) +
-    facet_wrap(~ compound, scales = "free", ncol = 5) +
+    facet_wrap(~ compound, scales = "free", ncol = 4) +
     labs(
       title    = "Predicted vs observed concentrations",
       subtitle = paste0("10-fold cross validation | dashed = 1:1 relationship",
@@ -832,33 +921,46 @@ make_plots <- function(res) {
     theme_publication(base_size = 9) +
     theme(legend.position = "bottom",
           legend.key.size = unit(8, "pt"),
-          strip.text      = element_text(size = 7.5, color = "black"),
+          strip.text      = element_text(size = 15, color = "black"),
           aspect.ratio    = 1)  # square panels without coord_fixed
   ggsave(paste0("fig2_Predicted_Scatter_", suffix, ".png"), p_scatter,
-         width = 7, height = 6, dpi = 300, bg = "white")
+         width = 15, height = 11, dpi = 300, bg = "white")
   cat("figures saved\n")
 }
 make_plots(results_all_rf_BDL)
-#need to remove the random forest package before make_plots()
-#because it conflicts with ggplot
-detach("package:randomForest", unload = TRUE)
-
 make_plots(results_all_rf)
 make_plots(results_all_xgb)
-make_plots(results_all_rf_BDL)
 make_plots(results_all_xgb_BDL)
 
 
+# get the indices that were actually used to train the final model
+valid_idx <- complete.cases(results_all_rf_BDL$preds_df) & 
+  !is.na(results_all_rf_BDL$water_input[["PFOA"]])
+
+train_x <- results_all_rf_BDL$preds_df[valid_idx, ]
+train_y <- results_all_rf_BDL$water_input[["PFOA"]][valid_idx]
+
+# predict on exact same rows the model was trained on
+library(randomForest)
+pfoa_train_pred <- predict(pfoa_model, newdata = train_x)
+
+cat("Length train_y:", length(train_y), "\n")
+cat("Length preds:  ", length(pfoa_train_pred), "\n")
+
+ss_res <- sum((train_y - pfoa_train_pred)^2)
+ss_tot <- sum((train_y - mean(train_y))^2)
+r2_train <- 1 - ss_res / ss_tot
+
+cat("Train R²:", round(r2_train, 3), "\n")
+cat("CV R²:   ", 0.671, "\n")
+cat("Gap:     ", round(r2_train - 0.671, 3), "\n")
 
 #i'll be proceeding with the results_above_BDL model
+#now, mapping PFAS onto HUC region 1 (New england)
 library(sf)
-
 flowlines <- st_read("C:/Users/Marston User/Documents/NE PFAS Data/NHDPlusV21_NE_01_NHDSnapshot_04/NHDPlusNE/NHDPlus01/NHDSnapshot/Hydrography/NHDFlowline.shp")
-
 comids <- flowlines$COMID
-length(comids)  # check how many stream reaches you're working with
-
-
+length(comids) #number of stream reaches for NE
 
 # 1. Get unique valid COMIDs from flowlines
 comids_ne <- unique(na.omit(flowlines$COMID))
@@ -906,21 +1008,20 @@ pred_df <- flowlines_pred %>%
   dplyr::select(all_of(sc_preds_found))
 
 # 3. Impute NAs with training data means
-train_means <- colMeans(results_nozero$preds_df, na.rm = TRUE)
+train_means <- colMeans(results_all_rf_BDL$preds_df, na.rm = TRUE)
 for (col in names(pred_df)) {
   pred_df[[col]][is.na(pred_df[[col]])] <- train_means[[col]]
 }
 
 # 4. Predict for each compound using the final trained models
-predictions <- lapply(names(results_nozero$model_list), function(compound) {
-  predict(results_nozero$model_list[[compound]], newdata = pred_df)
+predictions <- lapply(names(results_all_rf_BDL$final_models), function(compound) {
+  predict(results_all_rf_BDL$final_models[[compound]], newdata = pred_df)
 })
+names(predictions) <- names(results_all_rf_BDL$final_models)
 
-names(predictions) <- names(results_nozero$model_list)
-detach("package:randomForest", unload = TRUE)
-
-# 5. Back-transform from log1p to ng/L
-predictions_conc <- lapply(predictions, expm1)
+# 5. Back-transform from log10(x + 1) to ng/L
+#    log10(x + 1) = y  -->  x = 10^y - 1
+predictions_conc <- lapply(predictions, function(y) 10^y - 1)
 
 # 6. Add predictions to flowlines
 for (compound in names(predictions_conc)) {
@@ -969,13 +1070,13 @@ ne_states <- states(cb = TRUE) %>%
 out_dir <- "C:/Users/Marston User/Documents/NE PFAS Data/NE_Maps"
 
 
-for (compound in pfas_cols) {
+for (compound in all_pfas) {
   if (!compound %in% names(predictions)) next
   
   pred_col <- paste0(compound, "_pred")
   obs_col  <- compound
   
-  r2_val <- results_nozero$cv_results[[compound]]$r2
+  r2_val <- results_all_rf_BDL$cv_results[[compound]]$r2
   r2_label <- if (is.na(r2_val)) "R² = NA" else paste0("R² = ", round(r2_val, 3))
   
   cat_col <- paste0(compound, "_cat")
@@ -990,10 +1091,9 @@ for (compound in pfas_cols) {
             aes(color = .data[[cat_col]],
                 linewidth = sqrt(TotDASqKM)),  # sqrt dampens extreme values
             show.legend = TRUE) +
-    scale_linewidth(range = c(0.1, 2), name = "Watershed Area (km²)", guide = "legend")+
     scale_linewidth_continuous(
       name   = "Watershed Area (km²)",
-      range  = c(0.1, 2),
+      range  = c(0.1, 1.5),
       breaks = c(0, 40, 80, 120, 160),
       labels = c("0", "1,600", "6,400", "14,400", "25,600")
     )+
@@ -1022,7 +1122,7 @@ for (compound in pfas_cols) {
       legend.title  = element_text(size = 13, face = "bold"),
       legend.text   = element_text(size = 12),
       legend.position = "right",
-      plot.margin   = margin(t = 6, r = 6, b = 6, l = 6))+
+      plot.margin = ggplot2::margin(t = 6, r = 6, b = 6, l = 6))+
     theme(axis.line = element_blank(),
           axis.text = element_blank(),
           axis.ticks = element_blank(),
@@ -1041,25 +1141,41 @@ st_write(flowlines_pred, "flowlines_pred.gpkg", driver = "GPKG")
 
 install.packages("fastshap")
 library(fastshap)
+
 # Pull the trained model and training data
-pfoa_model <- results_nozero$model_list[["PFOA"]]
-train_data  <- results_nozero$preds_df[complete.cases(results_nozero$preds_df), ]
+pfoa_model <- results_all_rf_BDL$final_models[["PFOA"]]
+train_data  <- results_all_rf_BDL$preds_df[complete.cases(results_all_rf_BDL$preds_df), ]
+
+# need randomForest loaded for predict to work but detach after
+library(randomForest)
 
 # Define prediction wrapper
 pred_fun <- function(object, newdata) predict(object, newdata = newdata)
 
 # Compute SHAP values
 set.seed(42)
+#only doing the shap for 1000 samples instead of 4000+, 
+#I should get the general trend with a subset without having to run for as long
+train_sample <- train_data[sample(nrow(train_data), 1000), ]
+
+library(doParallel)
+cl <- makeCluster(detectCores() - 2)
+registerDoParallel(cl)
+
 shap_values <- explain(
-  object   = pfoa_model,
-  X        = train_data,
+  object       = pfoa_model,
+  X            = train_sample,
   pred_wrapper = pred_fun,
-  nsim     = 100,  # higher = more accurate but slower, 50-100 is fine
-  adjust   = TRUE
+  nsim         = 50,
+  adjust       = TRUE,
+  .parallel    = TRUE
 )
 
+stopCluster(cl)
 
 shap_df <- as.data.frame(shap_values)
+
+library(tidyverse)
 shap_importance <- shap_df %>%
   summarise(across(everything(), ~ mean(abs(.)))) %>%
   pivot_longer(everything(), names_to = "predictor", values_to = "mean_shap") %>%
@@ -1068,21 +1184,27 @@ shap_importance <- shap_df %>%
 ggplot(shap_importance, aes(x = reorder(predictor, mean_shap), y = mean_shap)) +
   geom_col(fill = "steelblue", alpha = 0.85) +
   coord_flip() +
-  labs(title    = "SHAP Feature Importance — PFOA",
-       x        = NULL,
-       y        = "Mean |SHAP value|") +
-  theme_classic()
+  labs(title = "SHAP Feature Importance — PFOA",
+       x     = NULL,
+       y     = "Mean |SHAP value|") +
+  theme_publication(base_size = 11)
+
+ggsave("fig3_shap_pfoa.png", width = 8, height = 6, dpi = 300, bg = "white")
 
 library(shapviz)
-# Get the StreamCat values for that specific NHD reach
+library(randomForest)
+
+# Get the StreamCat values for Manchester hotspot
 manchester_nhd <- flowlines_pred %>%
   st_drop_geometry() %>%
   filter(COMID == 6746428) %>%
   dplyr::select(all_of(sc_preds_found)) %>%
   slice(1)
 
-# Verify prediction matches
-predict(pfoa_model, newdata = manchester_nhd)  # should be ~11.33
+# Verify prediction (log10 scale)
+pred_log <- predict(pfoa_model, newdata = manchester_nhd)
+cat("Predicted (log10 scale):", round(pred_log, 3), "\n")
+cat("Predicted (ng/L):", round(10^pred_log - 1, 1), "\n")
 
 # Compute SHAP for this single observation
 set.seed(42)
@@ -1095,10 +1217,32 @@ shap_single <- explain(
   adjust       = TRUE
 )
 
-# Rename and plot
-shap_single_renamed <- as.data.frame(shap_single) %>% rename(!!!rename_map)
+rename_map <- c(
+  "Superfund Density"      = "superfunddensws",
+  "% Impervious Surface"   = "pctimp2019ws",
+  "% Wetland"              = "pcthbwet2019ws",
+  "Septic Systems"         = "septicws",
+  "Housing Density"        = "huden2010ws",
+  "% Barren Land"          = "pctbl2019ws",
+  "Toxic Release Sites"    = "tridensws",
+  "% Deciduous Forest"     = "pctdecid2019ws",
+  "Fertilizer Application" = "fertws",
+  "Base Flow Index"        = "bfiws",
+  "% Ag Drainage"          = "pctagdrainagews",
+  "NPDES Density"          = "npdesdensws",
+  "Manure Application"     = "manurews",
+  "Canal Density"          = "canaldensws",
+  "Dam Density"            = "damdensws",
+  "% Cropland"             = "pctcrop2019ws",
+  "Mine Density"           = "minedensws",
+  "Coal Mine Density"      = "coalminedensws"
+)
+
+# Rename SHAP and feature values
+shap_single_renamed  <- as.data.frame(shap_single) %>% rename(!!!rename_map)
 manchester_nhd_renamed <- manchester_nhd %>% rename(!!!rename_map)
 
+# Baseline on log10 scale (mean prediction across training data)
 baseline <- mean(predict(pfoa_model, newdata = train_data))
 
 sv_single <- shapviz(
@@ -1107,41 +1251,192 @@ sv_single <- shapviz(
   baseline = baseline
 )
 
-pred_val <- predict(pfoa_model, newdata = manchester_nhd)
-sv_waterfall(sv_single, row_id = 1, max_display = 16) +
+# Correct back-transform: log10 scale -> ng/L
+pred_ngL <- round(10^pred_log - 1, 1)
+
+p_wf <- sv_waterfall(sv_single, row_id = 1, max_display = 10)
+
+# force fill color in the geom layer
+for (i in seq_along(p_wf$layers)) {
+  p_wf$layers[[i]]$aes_params$fill <- "#8B0000"
+  p_wf$layers[[i]]$aes_params$colour <- "#5a0000"
+}
+
+p_wf +
+  scale_x_continuous(
+    name   = "Predicted PFOA concentration (ng/L)",
+    labels = function(x) round(10^x - 1, 1),
+    breaks = log10(c(1, 5, 10, 50, 100, 200, 300) + 1)
+  ) +
   labs(title    = "SHAP Waterfall — Manchester, NH Hotspot",
-       subtitle = paste0("Predicted: ", round(expm1(pred_val), 1), " ng/L PFOA")) +
-  theme_classic(base_size = 12)
+       subtitle = paste0("Predicted PFOA: ", pred_ngL, " ng/L"),
+       caption  = "Bar labels show multiplicative effect on predicted concentration (10^SHAP)") +
+  theme_classic(base_size = 15) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 17, hjust = 0),
+    plot.subtitle      = element_text(color = "grey40", size = 14, hjust = 0),
+    axis.text.y        = element_text(size = 13, color = "black", face = "italic"),
+    axis.text.x        = element_text(size = 12, color = "black"),
+    axis.title.x       = element_text(size = 13, margin = ggplot2::margin(t = 8)),
+    axis.title.y       = element_blank(),
+    panel.grid.major.x = element_line(color = "grey92", linewidth = 0.4),
+    panel.grid.major.y = element_blank(),
+    panel.border       = element_blank(),
+    axis.line.x        = element_line(color = "black", linewidth = 0.4),
+    axis.line.y        = element_blank(),
+    axis.ticks.y       = element_blank(),
+    plot.margin        = ggplot2::margin(15, 30, 10, 10)
+  )
 
-# Rename AFTER computing SHAP
+ggsave("fig4_shap_waterfall_manchester.png",
+       width = 11, height = 6, dpi = 300, bg = "white")
+
+# Beeswarm importance plot using full training SHAP
 shap_df <- as.data.frame(shap_values)
-names(shap_df) <- names(train_data)  # keep in sync
-
-# Now rename both for plotting
-rename_map <- c(
-  "% Impervious Surface" = "pctimp2019ws",
-  "Housing Density"      = "huden2010ws",
-  "Superfund Density"    = "superfunddensws",
-  "% Barren Land"        = "pctbl2019ws",
-  "Fertilizer Application"           = "fertws",
-  "Toxic Release Sites"          = "tridensws",
-  "% Deciduous Forest"   = "pctdecid2019ws",
-  "% Wetland"            = "pcthbwet2019ws",
-  "Manure"               = "manurews",
-  "Mine Density"         = "minedensws",
-  "Canal Density"        = "canaldensws",
-  "% Cropland"           = "pctcrop2019ws",
-  "Dam Density"          = "damdensws",
-  "% Ag Drainage"        = "pctagdrainagews",
-  "NPDES Density"        = "npdesdensws"
-)
-
+shap_renamed <- shap_df %>% rename(!!!rename_map)
 train_renamed <- train_data %>% rename(!!!rename_map)
-shap_renamed  <- shap_df %>% rename(!!!rename_map)
+
+sv <- shapviz(
+  object   = as.matrix(shap_renamed),
+  X        = train_renamed,
+  baseline = baseline
+)
 
 sv_importance(sv, kind = "beeswarm") +
   labs(title = "SHAP analysis of PFOA predictors") +
   theme_classic(base_size = 12)
+
+sv_importance(sv, kind = "beeswarm") +
+  labs(
+    title   = "SHAP feature importance — PFOA",
+    caption = "SHAP values represent contribution to log₁₀(PFOA + 1) prediction"
+  ) +
+  xlab("SHAP value") +
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 15, hjust = 0),
+    plot.caption       = element_text(color = "grey50", size = 9, hjust = 0),
+    axis.text.y        = element_text(size = 11, color = "black", face = "italic"),
+    axis.text.x        = element_text(size = 10, color = "black"),
+    axis.title.x       = element_text(size = 11, margin = ggplot2::margin(t = 8)),
+    axis.title.y       = element_blank(),
+    panel.grid.major.x = element_line(color = "grey92", linewidth = 0.3),
+    panel.grid.major.y = element_blank(),
+    panel.border       = element_blank(),
+    axis.line.x        = element_line(color = "black", linewidth = 0.4),
+    axis.line.y        = element_blank(),
+    axis.ticks.y       = element_blank(),
+    legend.title       = element_text(size = 10, face = "bold"),
+    legend.text        = element_text(size = 9),
+    plot.margin        = ggplot2::margin(15, 20, 10, 10)
+  )
+
+ggsave("fig5_shap_beeswarm_pfoa.png",
+       width = 10, height = 7, dpi = 300, bg = "white")
+
+# Pull PFOS model and training data
+pfos_model <- results_all_rf_BDL$final_models[["PFOS"]]
+
+valid_idx_pfos <- complete.cases(results_all_rf_BDL$preds_df) &
+  !is.na(results_all_rf_BDL$water_input[["PFOS"]])
+
+train_data_pfos <- results_all_rf_BDL$preds_df[valid_idx_pfos, ]
+
+# Compute SHAP for PFOS
+set.seed(42)
+cl <- makeCluster(detectCores() - 2)
+registerDoParallel(cl)
+library(randomForest)
+
+set.seed(42)
+sample_idx <- sample(nrow(train_data_pfos), 500)
+train_sample_pfos <- train_data_pfos[sample_idx, ]
+
+shap_pfos <- explain(
+  object       = pfos_model,
+  X            = train_sample_pfos,
+  pred_wrapper = function(object, newdata) randomForest:::predict.randomForest(object, newdata = newdata),
+  nsim         = 50,
+  adjust       = TRUE,
+  parallel     = FALSE
+)
+
+detach("package:randomForest", unload = TRUE)
+
+# rename using same sample
+shap_pfos_df       <- as.data.frame(shap_pfos) %>% rename(!!!rename_map)
+train_pfos_renamed <- train_sample_pfos %>% rename(!!!rename_map)
+
+# drop any rows with NA in either
+valid <- complete.cases(shap_pfos_df) & complete.cases(train_pfos_renamed)
+shap_pfos_df       <- shap_pfos_df[valid, ]
+train_pfos_renamed <- train_pfos_renamed[valid, ]
+
+baseline_pfos <- mean(predict(
+  results_all_rf_BDL$final_models[["PFOS"]],
+  newdata = train_data_pfos
+))
+
+sv_pfos <- shapviz(
+  object   = as.matrix(shap_pfos_df),
+  X        = train_pfos_renamed,
+  baseline = baseline_pfos
+)
+
+# Plot both beeswarms
+p_pfoa_bee <- sv_importance(sv, kind = "beeswarm") +
+  labs(title = "PFOA") +
+  xlab("SHAP value") +
+  xlim(-0.3, 1.1) +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 14, hjust = 0.5),
+    axis.text.y        = element_text(size = 10, color = "black", face = "italic"),
+    axis.text.x        = element_text(size = 9),
+    axis.title.x       = element_text(size = 10, margin = ggplot2::margin(t = 8)),
+    axis.title.y       = element_blank(),
+    panel.grid.major.x = element_line(color = "grey92", linewidth = 0.3),
+    panel.grid.major.y = element_blank(),
+    axis.line.x        = element_line(color = "black", linewidth = 0.4),
+    axis.line.y        = element_blank(),
+    axis.ticks.y       = element_blank(),
+    plot.margin        = ggplot2::margin(10, 15, 10, 10)
+  )
+
+p_pfos_bee <- sv_importance(sv_pfos, kind = "beeswarm") +
+  labs(title = "PFOS") +
+  xlab("SHAP value") +
+  xlim(-0.3, 1.1) +  # same x axis as PFOA for direct comparison
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 14, hjust = 0.5),
+    axis.text.y        = element_text(size = 10, color = "black", face = "italic"),
+    axis.text.x        = element_text(size = 9),
+    axis.title.x       = element_text(size = 10, margin = ggplot2::margin(t = 8)),
+    axis.title.y       = element_blank(),
+    panel.grid.major.x = element_line(color = "grey92", linewidth = 0.3),
+    panel.grid.major.y = element_blank(),
+    axis.line.x        = element_line(color = "black", linewidth = 0.4),
+    axis.line.y        = element_blank(),
+    axis.ticks.y       = element_blank(),
+    plot.margin        = ggplot2::margin(10, 15, 10, 10)
+  )
+
+# combine side by side
+library(patchwork)
+p_combined <- p_pfoa_bee + p_pfos_bee +
+  plot_annotation(
+    title    = "SHAP feature importance — PFOA vs PFOS",
+    caption  = "SHAP values represent contribution to log_19 (concentration + 1) prediction",
+    theme    = theme(
+      plot.title   = element_text(face = "bold", size = 16, hjust = 0.5),
+      plot.caption = element_text(color = "grey50", size = 9, hjust = 0)
+    )
+  )
+p_combined
+ggsave("fig6_shap_pfoa_vs_pfos.png", p_combined,
+       width = 16, height = 7, dpi = 300, bg = "white")
+detach("package:randomForest", unload = TRUE)
 
 group_map <- list(
   Urban = c("% Impervious Surface", "Housing Density"),
@@ -1210,14 +1505,6 @@ sv_waterfall(sv, row_id = manchester_train_idx, max_display = 16) +
        subtitle = paste0("Predicted: 224 ng/L PFOA")) +
   theme_classic(base_size = 12)
 
-hotspots <- flowlines_pred %>%
-  filter(PFOA > 100) %>%
-  st_centroid() %>%
-  st_coordinates() %>%
-  as.data.frame() %>%
-  bind_cols(flowlines_pred %>% filter(PFOA > 100) %>% st_drop_geometry() %>% dplyr::select(PFOA, COMID))
-
-print(hotspots)
 
 # Get StreamCat predictors for COMID 19334991
 nhd_19334991 <- flowlines_pred %>%
