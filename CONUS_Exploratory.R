@@ -1,5 +1,5 @@
 #conus 2: back at it
-
+setwd("C:/Users/Marston User/Documents/CONUS_PFAS")
 # ============================================================================
 # PHASE 1, STEP 1: UNIFIED DATA LOADER WITH METADATA TRACKING
 # ============================================================================
@@ -33,8 +33,9 @@ dataset_catalog <- tribble(
   "Ahrens_2023",        "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/Ahrens_et_al_2023_Arctic.csv",  "Arctic",
   "Sharma_2016",        "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/Sharma_et_al_2016_Ganges_River.csv", "India",
   "AustraliaMap_2026",  "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/Australia_Government_PFAS_CHEM_MAP_Clean.csv", "Australia",
-  "Woodward_2026",     "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/Woodward_et_al_California_2026.csv", "USA"
-  )
+  "Woodward_2026",     "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/Woodward_et_al_California_2026.csv", "USA",
+  "MA_PWS_2026", "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/MassachusettsSurfaceWaterSupply_PFAS_Cleaned.csv", "USA",
+  "Petre_2022", "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/Petre_et_al_2022_North_Carolina.csv", "USA")
 
 # PFAS compounds to standardize across all datasets
 all_pfas <- c(
@@ -122,7 +123,7 @@ load_and_standardize <- function(dataset_name, url, expected_region) {
   # Select core columns: essential spatial + temporal + PFAS compounds + source tracking
   df_clean <- df %>%
     dplyr::select(
-      any_of(c("Latitude", "Longitude", "year", "month", all_pfas))
+      any_of(c("Latitude", "Longitude", "year", "month", "Sample Date (MM/DD/YYY)", "Sample Time", all_pfas))
     ) %>%
     # Add metadata columns
     mutate(
@@ -165,7 +166,7 @@ print(global_pfas_raw %>%
 
 cat("\n")
 # Count unique sites by unique coordinate pairs
-unique_sites <- global_pfas_raw %>%
+unique_global_sites <- global_pfas_raw %>%
   distinct(Latitude, Longitude) %>%
   nrow()
 
@@ -182,11 +183,7 @@ print(global_pfas_raw %>%
         ) %>%
         arrange(desc(n_unique_sites)))
 
-
-
-# ============================================================================
 # PHASE 1, STEP 2: SPATIAL CLIPPING & REGIONAL SUBSETTING
-# ============================================================================
 
 library(sf)
 library(rnaturalearth)
@@ -205,9 +202,7 @@ global_pfas_sf <- st_as_sf(
 cat("Global PFAS dataset converted to spatial object\n")
 cat("Total valid locations:", nrow(global_pfas_sf), "\n\n")
 
-# ============================================================================
 # Define regional subsets
-# ============================================================================
 
 # Function to clip data to country/region
 clip_to_region <- function(data_sf, region_name, countries) {
@@ -226,10 +221,7 @@ clip_to_region <- function(data_sf, region_name, countries) {
   return(region_data)
 }
 
-# ============================================================================
 # CONUS (Continental US)
-# ============================================================================
-
 USA_states <- ne_states(country = "united states of america", returnclass = "sf")
 
 conus_bbox <- st_as_sfc(
@@ -250,10 +242,7 @@ conus_pfas <- global_pfas_sf %>%
 
 cat("CONUS (USA, lower 48):", nrow(conus_pfas), "observations\n")
 
-# ============================================================================
 # EUROPE
-# ============================================================================
-
 europe_countries <- c(
   "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czech Republic",
   "Denmark", "Estonia", "Finland", "France", "Germany", "Greece",
@@ -270,9 +259,7 @@ europe_pfas <- clip_to_region(global_pfas_sf, "Europe", europe_countries) %>%
   st_drop_geometry() %>%
   mutate(region = "Europe")
 
-# ============================================================================
 # CANADA
-# ============================================================================
 
 canada_pfas <- clip_to_region(global_pfas_sf, "Canada", c("Canada")) %>%
   mutate(
@@ -282,9 +269,7 @@ canada_pfas <- clip_to_region(global_pfas_sf, "Canada", c("Canada")) %>%
   st_drop_geometry() %>%
   mutate(region = "Canada")
 
-# ============================================================================
 # AUSTRALIA
-# ============================================================================
 
 australia_pfas <- clip_to_region(global_pfas_sf, "Australia", c("Australia")) %>%
   mutate(
@@ -294,9 +279,7 @@ australia_pfas <- clip_to_region(global_pfas_sf, "Australia", c("Australia")) %>
   st_drop_geometry() %>%
   mutate(region = "Australia")
 
-# ============================================================================
 # REST OF WORLD
-# ============================================================================
 
 all_clipped <- bind_rows(conus_pfas, europe_pfas, canada_pfas, australia_pfas)
 
@@ -317,9 +300,7 @@ row_world <- global_coords %>%
 
 cat("Other Global:", nrow(row_world), "observations\n")
 
-# ============================================================================
 # COMBINE ALL WITH REGION TAGS
-# ============================================================================
 
 global_pfas_regional <- bind_rows(
   conus_pfas, europe_pfas, canada_pfas, australia_pfas, row_world
@@ -340,6 +321,7 @@ print(global_pfas_regional %>%
 # SAVE FOR NEXT PHASE
 # ============================================================================
 
+library(tidyverse)
 saveRDS(global_pfas_regional, "global_pfas_regional.rds")
 
 cat("\n✓ Saved: global_pfas_regional.rds\n")
@@ -357,14 +339,13 @@ pfas_present <- intersect(all_pfas, names(conus_data))
 
 conus_data_filtered <- conus_data %>%
   mutate(across(
-    any_of(pfas_present),
-    ~ifelse(. <= 0, NA_real_, .)          # zero/negative → NA before log
+    any_of(pfas_present)
   )) %>%
   mutate(row_id = row_number()) %>%
   pivot_longer(any_of(pfas_present), names_to = "compound", values_to = "conc") %>%
   group_by(compound) %>%
   mutate(
-    log_conc  = log10(conc),
+    log_conc  = log10(conc + 1),
     log_mean  = mean(log_conc, na.rm = TRUE),
     log_sd    = sd(log_conc,   na.rm = TRUE),
     z_score   = (log_conc - log_mean) / log_sd,
@@ -383,13 +364,12 @@ cat("Rows retained (rows aren't dropped, outlier values set to NA):", nrow(conus
 # Then use conus_data_filtered going forward
 conus_data <- conus_data_filtered
 
-conus_data %>%
-  distinct(Latitude, Longitude) %>%
-  nrow()
+unique_conus_sites <- conus_data %>%
+  distinct(Latitude, Longitude)
 
-# ============================================================================
+#this is the number of sites in the conus dataset
+
 # PHASE 1, STEP 3: Cleaned DATA EXPLORATION & VISUALIZATION
-# ============================================================================
 
 library(ggplot2)
 library(dplyr)
@@ -398,9 +378,7 @@ library(sf)
 library(dbscan)
 library(wesanderson)
 
-# ============================================================================
-# 1. SPATIAL DENSITY HEATMAP - CONUS
-# ============================================================================
+# ---1. SPATIAL DENSITY HEATMAP - CONUS-------------
 
 p_conus_spatial <- ggplot(conus_data, aes(x = Longitude, y = Latitude)) +
   stat_density_2d(aes(fill = after_stat(density)), geom = "tile", contour = FALSE, bins = 50) +
@@ -416,9 +394,7 @@ p_conus_spatial
 ggsave("01_conus_spatial_density.png", p_conus_spatial, width = 12, height = 8, dpi = 300)
 cat("✓ Saved: 01_conus_spatial_density.png\n")
 
-# ============================================================================
-# 2. TEMPORAL TRENDS - CONUS
-# ============================================================================
+# ------2. Yearly sampling TRENDS - CONUS-------------
 
 conus_temporal <- conus_data %>%
   group_by(year) %>%
@@ -437,10 +413,6 @@ p_conus_temporal <- ggplot(conus_temporal, aes(x = year, y = n_obs)) +
 p_conus_temporal
 ggsave("02_conus_temporal_trend.png", p_conus_temporal, width = 10, height = 6, dpi = 300)
 cat("✓ Saved: 02_conus_temporal_trend.png\n")
-
-# ============================================================================
-# 3. COMPOUND DETECTION SUMMARY - CONUS
-# ============================================================================
 
 # Calculate detection frequency for each compound in CONUS
 compound_detection <- conus_data %>%
@@ -476,141 +448,277 @@ cat("✓ Saved: 03_conus_compound_detection.png\n")
 cat("\nTop 10 Detected Compounds in CONUS:\n")
 print(compound_detection %>% head(10))
 
-# ============================================================================
-# 4. REPEAT OBSERVATIONS - TEMPORAL VARIABILITY (ADVISOR ITEM #1)
-# ============================================================================
-
-# Find sites with repeat observations (same Lat/Lon, multiple years/months)
-repeat_sites <- conus_data %>%
-  group_by(Latitude, Longitude, dataset_source) %>%
-  summarise(
-    n_obs      = n(),
-    n_years    = n_distinct(year,  na.rm = TRUE),
-    n_months   = n_distinct(month, na.rm = TRUE),
-    year_range = ifelse(
-      all(is.na(year)), 
-      NA_real_, 
-      max(year, na.rm = TRUE) - min(year, na.rm = TRUE)
-    ),
-    .groups = "drop"
-  ) %>%
-  filter(n_obs > 1) %>%
-  arrange(desc(n_obs))
-
-cat("\nSites with Repeat Observations (n > 1):\n")
-cat("Total unique sites with repeats:", nrow(repeat_sites), "\n")
-cat("Mean observations per site:", round(mean(repeat_sites$n_obs), 2), "\n")
-cat("Max observations at single site:", max(repeat_sites$n_obs), "\n\n")
-
-print(repeat_sites %>% head(15))
-# Pull the actual coordinates of the top site first
-repeat_sites %>% slice(1) %>% dplyr::select(Latitude, Longitude)
-
-# Then filter on exact match instead of approximate
-top_site <- repeat_sites %>% slice(1)
-
-conus_data %>%
-  filter(
-    Latitude  == top_site$Latitude,
-    Longitude == top_site$Longitude,
-    dataset_source == "Caravan_PFAS"
-  ) %>%
-  group_by(year, month) %>%
-  summarise(n = n(), .groups = "drop") %>%
-  arrange(year, month)
-# ============================================================================
-# 5. TEMPORAL VARIABILITY AT REPEAT SITES (ADVISOR ITEM #1)
-# ============================================================================
-
-# Calculate standard deviation of PFAS concentrations at repeat sites
-repeat_site_variability <- repeat_sites %>%
-  filter(n_obs >= 4) %>%          # <-- add this line
-  left_join(conus_data, by = c("Latitude", "Longitude", "dataset_source")) %>%
-  group_by(Latitude, Longitude, dataset_source) %>%
-  summarise(
-    across(any_of(all_pfas),
-           list(
-             cv = ~ifelse(mean(., na.rm = TRUE) == 0, NA_real_,
-                          sd(., na.rm = TRUE) / mean(., na.rm = TRUE))
-           )),
-    .groups = "drop"
-  )
-
-# Calculate mean CV (coefficient of variation) for compounds with data
-site_variability_summary <- repeat_site_variability %>%
-  dplyr::select(ends_with("_cv")) %>%
-  pivot_longer(everything()) %>%
-  separate(name, into = c("compound", "metric"), sep = "_cv") %>%
-  drop_na(value) %>%
-  group_by(compound) %>%
-  summarise(
-    mean_cv = mean(value, na.rm = TRUE),
-    median_cv = median(value, na.rm = TRUE),
-    max_cv = max(value, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  arrange(desc(mean_cv))
-
-cat("\nTemporal Variability at Repeat Sites (Coefficient of Variation):\n")
-print(site_variability_summary, n = Inf)
-
-# ============================================================================
-# 6. DB SCAN CLUSTERING - METADATA + CONCENTRATIONS (ADVISOR ITEM #4)
-# ============================================================================
+#------------DB SCAN ----------------------
+library(dbscan)
 
 cat("DB SCAN Clustering (Metadata + Concentrations)\n")
 
-# Prepare data for DB SCAN: metadata (year, month) + top 5 PFAS compounds
+# Top 5 compounds by detection frequency
 top_compounds <- compound_detection %>% head(5) %>% pull(compound)
+cat("Top compounds:", paste(top_compounds, collapse = ", "), "\n")
 
+# DB Scan PREPARE FEATURES
+# Note: exclude Lat/Lon from clustering features
+# — we want chemical/temporal clusters, not geographic ones
+# Geography is only used for visualization afterward
 dbscan_data <- conus_data %>%
-  dplyr::select(year, month, Latitude, Longitude, all_of(top_compounds)) %>%
-  drop_na() %>%
-  mutate(
-    year = ifelse(is.na(year), median(year, na.rm = TRUE), year),
-    month = ifelse(is.na(month), 6, month)  # Impute missing months with 6
-  )
+  dplyr::select(Latitude, Longitude, all_of(top_compounds)) %>%
+#  mutate(
+#    year  = ifelse(is.na(year),  median(year,  na.rm = TRUE), year),
+#    month = ifelse(is.na(month), 6,                           month)
+#  ) %>%
+  drop_na()   # drop_na AFTER imputation so only truly missing coords/compounds removed
 
-# Standardize features for DB SCAN
-dbscan_scaled <- scale(dbscan_data %>% dplyr::select(year, month, all_of(top_compounds)))
+cat("Observations for clustering:", nrow(dbscan_data), "\n\n")
 
-# Run DB SCAN
-db <- dbscan(dbscan_scaled, eps = 0.5, minPts = 5)
+# Features for clustering: temporal + chemical only (NOT lat/lon)
+cluster_features <- dbscan_data %>%
+  dplyr::select(all_of(top_compounds)) #year, month, 
 
-cat("DB SCAN Results:\n")
-cat("Number of clusters:", length(unique(db$cluster[db$cluster > 0])), "\n")
-cat("Noise points:", sum(db$cluster == 0), "\n")
-cat("Clustered points:", sum(db$cluster > 0), "\n\n")
+# Standardize
+dbscan_scaled <- scale(cluster_features)
 
-# Add cluster assignments back
-dbscan_data$cluster <- db$cluster
+# DB Scan STEP 1: KNN DISTANCE PLOT TO SELECT EPSILON
+# The 'elbow' in this plot is the ideal epsilon value
+k_val <- 5  # should match minPts
 
-# Visualize clusters in space
-p_dbscan_spatial <- ggplot(dbscan_data, aes(x = Longitude, y = Latitude, color = factor(cluster))) +
-  geom_point(size = 2, alpha = 0.6) +
-  scale_color_manual(
-    values = c("0" = "orange", setNames(rainbow(length(unique(db$cluster))-1), 
-                                     as.character(1:(length(unique(db$cluster))-1)))),
-    name = "Cluster"
-  ) +
+knn_dists <- kNN(dbscan_scaled, k = k_val)$dist
+knn_k     <- sort(knn_dists[, k_val])
+
+# Find elbow programmatically
+# Max curvature point = where second derivative is largest
+d1    <- diff(knn_k)
+d2    <- diff(d1)
+elbow <- which.max(d2) + 1
+suggested_eps <- knn_k[elbow]
+
+# Zoom into the bottom 90% of the curve where the real elbow is
+p_knn_zoom <- ggplot(
+  data.frame(rank = seq_along(knn_k), dist = knn_k) %>%
+    filter(dist < 3),    # zoom to distances < 3
+  aes(x = rank, y = dist)
+) +
+  geom_line(linewidth = 0.8, color = "steelblue") +
   labs(
-    title = "CONUS: DB SCAN Clustering (Metadata + Top 5 PFAS)",
-    subtitle = "orange points = Noise/Outliers",
-    x = "Longitude", y = "Latitude"
+    title    = "KNN Distance Plot — Zoomed (dist < 3)",
+    subtitle = "Look for the elbow where curve bends away from flat",
+    x        = "Points sorted by distance",
+    y        = "5th nearest neighbor distance"
   ) +
   theme_minimal() +
   theme(plot.title = element_text(face = "bold", size = 14))
-p_dbscan_spatial
-ggsave("04_dbscan_clusters_spatial.png", p_dbscan_spatial, width = 12, height = 8, dpi = 300)
-cat("✓ Saved: 04_dbscan_clusters_spatial.png\n")
 
-# Summary by cluster
-cat("\nCluster Sizes:\n")
+p_knn_zoom
+cat("Suggested epsilon from KNN elbow:", round(suggested_eps, 3), "\n\n")
+
+p_knn <- ggplot(
+  data.frame(rank = seq_along(knn_k), dist = knn_k),
+  aes(x = rank, y = dist)
+) +
+  geom_line(linewidth = 0.8, color = "steelblue") +
+  geom_vline(xintercept = elbow, linetype = "dashed", color = "red", linewidth = 0.8) +
+  geom_hline(yintercept = suggested_eps, linetype = "dashed", color = "red", linewidth = 0.8) +
+  annotate("text", x = elbow + 50, y = suggested_eps + 0.05,
+           label = paste0("ε ≈ ", round(suggested_eps, 2)),
+           color = "red", size = 4) +
+  labs(
+    title    = "KNN Distance Plot for DBSCAN Epsilon Selection",
+    subtitle = paste0("k = ", k_val, " | Red dashed lines = suggested epsilon"),
+    x        = "Points sorted by distance",
+    y        = paste0(k_val, "th nearest neighbor distance")
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 14))
+
+p_knn
+ggsave("04a_dbscan_knn_distance.png", p_knn, width = 10, height = 6, dpi = 300)
+cat("✓ Saved: 04a_dbscan_knn_distance.png\n\n")
+
+#epsilon is way to high and should be closer to the elbow. 
+# Test a range of epsilon values to find meaningful cluster structure
+eps_candidates <- c(0.3, 0.5, 0.75, 1.0, 1.5, 2.0)
+
+eps_comparison <- lapply(eps_candidates, function(e) {
+  db_test <- dbscan(dbscan_scaled, eps = e, minPts = 5)
+  tibble(
+    eps          = e,
+    n_clusters   = length(unique(db_test$cluster[db_test$cluster > 0])),
+    noise_points = sum(db_test$cluster == 0),
+    pct_noise    = round(sum(db_test$cluster == 0) / nrow(dbscan_scaled) * 100, 1),
+    pct_clustered = round(sum(db_test$cluster > 0) / nrow(dbscan_scaled) * 100, 1)
+  )
+}) %>% bind_rows()
+
+print(eps_comparison)
+#aiming for 5-10 clusters and 5-15% noise. 
+#Therefore, going to proceed with epsilon=0.75
+
+working_eps <- 0.75
+# DB Scan STEP 2: RUN DBSCAN WITH SUGGESTED EPSILON
+
+eps_use  <- working_eps
+minPts_use <- 5
+
+db <- dbscan(dbscan_scaled, eps = eps_use, minPts = minPts_use)
+
+cat("DBSCAN Results (eps =", round(eps_use, 3), ", minPts =", minPts_use, "):\n")
+cat("Number of clusters:", length(unique(db$cluster[db$cluster > 0])), "\n")
+cat("Noise points:",       sum(db$cluster == 0), "\n")
+cat("Clustered points:",   sum(db$cluster > 0),  "\n\n")
+
+dbscan_data$cluster <- db$cluster
+n_clusters <- length(unique(db$cluster[db$cluster > 0]))
+# DB Scan STEP 3: SPATIAL VISUALIZATION
+# Now lat/lon are only used for plotting, not for clustering
+
+# Update epsilon and rerun clustering
+eps_use    <- 0.75
+minPts_use <- 5
+db         <- dbscan(dbscan_scaled, eps = eps_use, minPts = minPts_use)
+dbscan_data$cluster <- db$cluster
+n_clusters <- length(unique(db$cluster[db$cluster > 0]))
+
+# ---- Updated KNN plot: zoomed + all candidates marked ----
+eps_candidates <- c(0.3, 0.5, 0.75, 1.0, 1.5, 2.0)
+n_clusters_by_eps <- c(54, 58, 8, 8, 6, 1)   # from your eps_comparison table
+
+p_knn_final <- ggplot(
+  data.frame(rank = seq_along(knn_k), dist = knn_k) %>%
+    filter(dist < 3),
+  aes(x = rank, y = dist)
+) +
+  geom_line(linewidth = 0.9, color = "steelblue") +
+  # All candidate epsilons as grey lines
+  geom_hline(
+    data = data.frame(eps = eps_candidates),
+    aes(yintercept = eps),
+    linetype = "dotted", color = "grey50", linewidth = 0.5
+  ) +
+  # Chosen epsilon highlighted in red
+  geom_hline(yintercept = eps_use, linetype = "dashed",
+             color = "red", linewidth = 1.0) +
+  # Labels for each candidate showing cluster count
+  annotate("text",
+           x     = 100,
+           y     = eps_candidates + 0.07,
+           label = paste0("ε=", eps_candidates,
+                          " (", n_clusters_by_eps, " clusters)"),
+           color = ifelse(eps_candidates == eps_use, "red", "grey40"),
+           size  = 3.2, hjust = 0) +
+  labs(
+    title    = "KNN Distance Plot — Epsilon Selection for DBSCAN",
+    subtitle = paste0("k = ", k_val,
+                      " | Red = chosen ε (", eps_use, ") | ",
+                      n_clusters, " clusters, ",
+                      sum(db$cluster == 0), " noise points (",
+                      round(sum(db$cluster == 0) / nrow(dbscan_scaled) * 100, 1), "%)"),
+    x = "Points sorted by 5th nearest neighbor distance",
+    y = "5th nearest neighbor distance"
+  ) +
+  coord_cartesian(ylim = c(0, 3)) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title    = element_text(face = "bold", size = 15),
+        plot.subtitle = element_text(size = 10, color = "grey30"))
+
+p_knn_final
+ggsave("04a_dbscan_knn_final.png", p_knn_final, width = 11, height = 6, dpi = 300)
+cat("✓ Saved: 04a_dbscan_knn_final.png\n")
+
+# ---- Updated spatial cluster map ----
+p_dbscan_spatial <- ggplot(
+  dbscan_data %>% arrange(desc(cluster)),
+  aes(x = Longitude, y = Latitude, color = factor(cluster))
+) +
+  geom_point(size = 2, alpha = 0.7) +
+  scale_color_manual(
+    values = c("0" = "orange",
+               setNames(rainbow(n_clusters), as.character(1:n_clusters))),
+    name   = "Cluster",
+    labels = c("0" = "Noise",
+               setNames(paste("Cluster", 1:n_clusters),
+                        as.character(1:n_clusters)))
+  ) +
+  labs(
+    title    = "CONUS: DBSCAN Clustering (CHemistry only of the top 5 PFAS)",
+    subtitle = paste0("Orange = noise/outliers | ε = ", eps_use,
+                      " | ", n_clusters, " clusters | n = ", nrow(dbscan_data)),
+    x = "Longitude", y = "Latitude"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold", size = 15))
+
+p_dbscan_spatial
+ggplot(
+  filter(dbscan_data, cluster %in% 2:5),
+  aes(Longitude, Latitude, color = factor(cluster), label = cluster)
+) +
+  geom_point(size = 4) +
+  geom_text(nudge_y = 0.2)
+dbscan_data %>%
+  filter(cluster %in% 2:5) %>%
+  count(Longitude, Latitude)
+
+ggsave("04b_dbscan_clusters_spatial.png", p_dbscan_spatial,
+       width = 12, height = 8, dpi = 300)
+cat("✓ Saved: 04b_dbscan_clusters_spatial.png\n")
+
+# DB Scan STEP 4: CLUSTER CHEMICAL PROFILES
+# What makes each cluster chemically distinct?
+
+cat("\nCluster sizes:\n")
 print(table(dbscan_data$cluster))
 
-# ============================================================================
-# 7. RAW DATA SUMMARY STATISTICS
-# ============================================================================
+cat("\nMean concentrations by cluster:\n")
+cluster_profiles <- dbscan_data %>%
+  filter(cluster > 0) %>%   # exclude noise for profile summary
+  group_by(cluster) %>%
+  summarise(
+    n        = n(),
+    mean_year = round(mean(year, na.rm = TRUE), 1),
+    across(all_of(top_compounds),
+           ~round(mean(., na.rm = TRUE), 3))
+  ) %>%
+  arrange(cluster)
+
+print(cluster_profiles)
+
+# What are the chemical profiles of each cluster?
+cluster_summary <- dbscan_data %>%
+  group_by(cluster) %>%
+  summarise(
+    n           = n(),
+    pct_of_data = round(n() / nrow(dbscan_data) * 100, 1),
+    mean_year   = round(mean(year,  na.rm = TRUE), 1),
+    across(all_of(top_compounds),
+           list(
+             mean = ~round(mean(.,  na.rm = TRUE), 3),
+             cv   = ~round(sd(., na.rm = TRUE) / mean(., na.rm = TRUE), 2)
+           ),
+           .names = "{.col}_{.fn}")
+  ) %>%
+  arrange(cluster)
+
+print(cluster_summary, width = Inf)
+
+# Merge dataset_source back in using coordinates as key
+dbscan_data_sourced <- dbscan_data %>%
+  left_join(
+    conus_data %>% dplyr::select(Latitude, Longitude, dataset_source) %>% distinct(),
+    by = c("Latitude", "Longitude")
+  )
+
+# Now run the source breakdown
+cluster_source <- dbscan_data_sourced %>%
+  group_by(cluster, dataset_source) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(cluster) %>%
+  mutate(pct = round(n / sum(n) * 100, 1)) %>%
+  arrange(cluster, desc(n))
+
+print(cluster_source, n = 50)
+
+# ----7. RAW DATA SUMMARY STATISTICS---------
+
 cat("RAW DATA SUMMARY STATISTICS (CONUS)\n")
 
 summary_stats <- conus_data %>%
@@ -675,6 +783,7 @@ p_conus_spatial <- ggplot() +
  plot.title = element_text(face = "bold", size = 14),
  panel.grid = element_line(color = "grey90")
  )
+p_conus_spatial
 ggsave("01_conus_spatial_density_improved.png", p_conus_spatial,
  width = 14, height = 8, dpi = 300)
 # --- 1B. DATASET SOURCE MAP (color by dataset) ---
@@ -698,6 +807,7 @@ p_source_map <- ggplot() +
  ) +
  guides(color = guide_legend(ncol = 4, override.aes = list(size = 3, alpha = 1)))
 ggsave("01b_conus_source_map.png", p_source_map, width = 14, height = 10, dpi = 300)
+p_source_map
 # --- 1C. TEMPORAL PATTERNS (year + month heatmap) ---
 temporal_heatmap <- conus_data %>%
  filter(!is.na(year), !is.na(month)) %>%
@@ -715,75 +825,64 @@ p_temporal_heat <- ggplot(temporal_heatmap, aes(x = year, y = factor(month), fil
  ) +
  theme_minimal(base_size = 12) +
  theme(plot.title = element_text(face = "bold", size = 14))
+p_temporal_heat
 ggsave("02_temporal_heatmap.png", p_temporal_heat, width = 12, height = 6, dpi = 300)
-# --- 1D. METADATA DISTRIBUTIONS (multi-panel) ---
-# Dataset size distribution
-dataset_sizes <- conus_data %>%
- group_by(dataset_source) %>%
- summarise(n_obs = n(), n_sites = n_distinct(paste(Latitude, Longitude)),
- .groups = "drop") %>%
- arrange(desc(n_obs))
-p_meta1 <- ggplot(dataset_sizes, aes(x = reorder(dataset_source, n_obs), y = n_obs)) +
- geom_col(fill = "steelblue", alpha = 0.8) +
- geom_text(aes(label = format(n_obs, big.mark = ",")), hjust = -0.1, size = 3) +
- coord_flip() +
- scale_y_continuous(expand = expansion(mult = c(0, 0.2))) +
- labs(title = "Observations per Dataset", x = NULL, y = "N Observations") +
- theme_minimal(base_size = 11)
-# Year distribution
-p_meta2 <- ggplot(conus_data %>% filter(!is.na(year)),
- aes(x = year)) +
- geom_histogram(fill = "coral", alpha = 0.8, binwidth = 1, color = "white") +
- labs(title = "Distribution of Sampling Years", x = "Year", y = "Count") +
- theme_minimal(base_size = 11)
-# Spatial coverage (lat/lon marginals)
-p_meta3 <- ggplot(conus_data, aes(x = Longitude)) +
- geom_histogram(fill = "darkgreen", alpha = 0.7, bins = 50, color = "white") +
- labs(title = "Longitude Distribution", x = "Longitude", y = "Count") +
- theme_minimal(base_size = 11)
-p_meta4 <- ggplot(conus_data, aes(x = Latitude)) +
- geom_histogram(fill = "purple", alpha = 0.7, bins = 50, color = "white") +
- labs(title = "Latitude Distribution", x = "Latitude", y = "Count") +
- theme_minimal(base_size = 11)
-p_metadata_panel <- (p_meta1 | (p_meta2 / p_meta3 / p_meta4)) +
- plot_annotation(
- title = "CONUS PFAS Dataset: Metadata Distributions",
- theme = theme(plot.title = element_text(face = "bold", size = 16))
- )
-ggsave("03_metadata_distributions.png", p_metadata_panel, width = 16, height = 10, dpi = 300)
 # --- 1E. COMPOUND DETECTION FREQUENCY (improved) ---
+
 compound_stats <- conus_data %>%
- select(any_of(all_pfas)) %>%
- pivot_longer(everything(), names_to = "compound", values_to = "concentration") %>%
- group_by(compound) %>%
- summarise(
- n_total = n(),
- n_detected = sum(!is.na(concentration) & concentration > 0),
- detection_pct = (n_detected / n_total) * 100,
- median_conc = median(concentration[concentration > 0], na.rm = TRUE),
- p95_conc = quantile(concentration[concentration > 0], 0.95, na.rm = TRUE),
- .groups = "drop"
- ) %>%
- arrange(desc(detection_pct))
-p_detection <- ggplot(compound_stats %>% filter(detection_pct > 0),
-                      aes(x = reorder(compound, detection_pct), y = detection_pct)) +
-  geom_col(aes(fill = log10(median_conc + 1)), alpha = 0.9) +
-  geom_text(aes(label = paste0("n=", n_detected)), hjust = -0.1, size = 3) +
+  select(any_of(all_pfas)) %>%
+  pivot_longer(everything(), names_to = "compound", values_to = "concentration") %>%
+  group_by(compound) %>%
+  summarise(
+    n_total = n(),                                         # Total rows in dataset (for original sorting)
+    n_detected = sum(!is.na(concentration) & concentration > 0), # Total detections
+    n_measured = sum(!is.na(concentration)),               # Total valid tests (zeros + detections)
+    
+    # This matches your original sorting metric perfectly
+    global_detection_pct = (n_detected / n_total) * 100, 
+    
+    median_conc = median(concentration[concentration > 0], na.rm = TRUE),
+    p95_conc = quantile(concentration[concentration > 0], 0.95, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # Filter out compounds with zero detections globally
+  filter(global_detection_pct > 0)
+
+
+# --- PLOT UPDATES START HERE ---
+p_detection <- ggplot(compound_stats, aes(x = reorder(compound, global_detection_pct))) +
+  
+  # Layer 1: Background grey bar showing total valid tests (zeros + detections)
+  geom_col(aes(y = n_measured), fill = "grey70", alpha = 1, width = 0.7) +
+  
+  # Layer 2: Foreground colored bar showing only the hits/detections
+  geom_col(aes(y = n_detected, fill = log10(median_conc + 1)), alpha = 0.9, width = 0.7) +
+  
+  # Text label at the end of the grey bar showing the breakdown
+  geom_text(aes(y = n_measured, label = paste0(n_detected, " / ", n_measured)), 
+            hjust = -0.1, size = 3) +
+  
   scale_fill_viridis_c(option = "magma", name = "log10(Median\nConcentration)") +
   coord_flip() +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
-  geom_hline(yintercept = 5, linetype = "dashed", color = "red", alpha = 0.6) +
-  annotate("text", x = 2, y = 6, label = "Less than 5%", color = "red", size = 3) +
+  
+  # Expand the right side slightly so the text labels don't get cut off
+  scale_y_continuous(expand = expansion(mult = c(0, 0.18))) +
+  
   labs(
-    title = "PFAS Compound Detection Frequency in CONUS",
-    subtitle = "Color intensity = median concentration among detections",
-    x = "Compound", y = "Detection Frequency (%)"
+    title = "PFAS Compound Detection Counts in CONUS",
+    subtitle = "Sorted by global detection frequency | Grey bar = total observations | Colored bar = detections",
+    x = "Compound",
+    y = "Number of Observations (Counts)"
   ) +
   theme_minimal(base_size = 12) +
-  theme(plot.title = element_text(face = "bold", size = 14))
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    panel.grid.minor = element_blank()
+  )
+# Print and save
 p_detection
-ggsave("04_compound_detection.png", p_detection, width = 11, height = 10, dpi =
-300)
+ggsave("04_compound_detection.png", p_detection, width = 11, height = 10, dpi = 300)
+
 
 #combining a few plots. 
 p_source_map <- ggplot() +
@@ -807,33 +906,7 @@ p_source_map <- ggplot() +
   guides(color = guide_legend(ncol = 1, override.aes = list(size = 3, alpha = 1)))
 
 # Right panel: Filter to meaningful detection, fix annotation
-p_detection <- ggplot(compound_stats %>% filter(detection_pct > 1),
-                      aes(x = reorder(compound, detection_pct), y = detection_pct)) +
-  geom_col(aes(fill = log10(median_conc + 1)), alpha = 0.9, width = 0.75) +
-  geom_text(aes(label = format(n_detected, big.mark = ",")), 
-            hjust = -0.1, size = 3.5, fontface = "bold") +
-  scale_fill_viridis_c(option = "magma", name = "log10(Median\nConc. ng/L)") +
-  coord_flip() +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.18))) +
-  geom_vline(xintercept = which(levels(reorder(
-    (compound_stats %>% filter(detection_pct > 1))$compound,
-    (compound_stats %>% filter(detection_pct > 1))$detection_pct
-  )) == 
-    (compound_stats %>% filter(detection_pct > 1) %>% 
-       filter(detection_pct <= 5) %>% 
-       slice_max(detection_pct) %>% pull(compound))[1]) + 0.5,
-  linetype = "dashed", color = "red", linewidth = 0.8) +
-  labs(
-    title = "B) Compound Detection Frequency",
-    subtitle = "Compounds detected in >1% of samples",
-    x = NULL, y = "Detection Frequency (%)"
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    plot.title = element_text(face = "bold", size = 16),
-    plot.subtitle = element_text(size = 11, color = "grey40"),
-    legend.position = "right"
-  )
+
 
 # Combine
 p_combined <- p_source_map + p_detection +
@@ -851,7 +924,7 @@ p_combined <- p_source_map + p_detection +
 ggsave("05_combined_spatial_detection_v2.png", p_combined,
        width = 22, height = 11, dpi = 300)
 
-
+p_combined
 # ============================================================================
 # TEMPORAL VARIABILITY MAPS
 
@@ -860,10 +933,72 @@ short_chain <- c("PFBS", "PFHxA", "PFBA", "PFPeA", "PFHxS", "PFHpA")
 long_chain  <- c("PFOS", "PFOA", "PFNA", "PFDA", "PFUnDA", "PFDoA")
 
 # --- Step 1: Compute site-level temporal statistics ---
+# 4. TEMPORAL VARIABILITY of sites with repeat observations
+
+# Find sites with repeat observations (same Lat/Lon, multiple years/months)
+repeat_sites <- conus_data %>%
+  group_by(Latitude, Longitude, dataset_source) %>%
+  summarise(
+    n_obs      = n(),
+    n_years    = n_distinct(year,  na.rm = TRUE),
+    n_months   = n_distinct(month, na.rm = TRUE),
+    year_range = ifelse(
+      all(is.na(year)), 
+      NA_real_, 
+      max(year, na.rm = TRUE) - min(year, na.rm = TRUE)
+    ),
+    .groups = "drop"
+  ) %>%
+  filter(n_obs > 1) %>%
+  arrange(desc(n_obs))
+
+cat("\nSites with Repeat Observations (n > 1):\n")
+cat("Total unique sites with repeats:", nrow(repeat_sites), "\n")
+cat("Mean observations per site:", round(mean(repeat_sites$n_obs), 2), "\n")
+cat("Max observations at single site:", max(repeat_sites$n_obs), "\n\n")
+
+print(repeat_sites %>% head(15))
+# Pull the actual coordinates of the top site first
+repeat_sites %>% slice(1) %>% dplyr::select(Latitude, Longitude)
+
+# Then filter on exact match instead of approximate
+top_site <- repeat_sites %>% slice(1)
+
+# Calculate standard deviation of PFAS concentrations at repeat sites
+repeat_site_variability <- repeat_sites %>%
+  filter(n_obs >= 4) %>%          # <-- add this line
+  left_join(conus_data, by = c("Latitude", "Longitude", "dataset_source")) %>%
+  group_by(Latitude, Longitude, dataset_source) %>%
+  summarise(
+    across(any_of(all_pfas),
+           list(
+             cv = ~ifelse(mean(., na.rm = TRUE) == 0, NA_real_,
+                          sd(., na.rm = TRUE) / mean(., na.rm = TRUE))
+           )),
+    .groups = "drop"
+  )
+
+# Calculate mean CV (coefficient of variation) for compounds with data
+site_variability_summary <- repeat_site_variability %>%
+  dplyr::select(ends_with("_cv")) %>%
+  pivot_longer(everything()) %>%
+  separate(name, into = c("compound", "metric"), sep = "_cv") %>%
+  drop_na(value) %>%
+  group_by(compound) %>%
+  summarise(
+    mean_cv = mean(value, na.rm = TRUE),
+    median_cv = median(value, na.rm = TRUE),
+    max_cv = max(value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_cv))
+
+cat("\nTemporal Variability at Repeat Sites (Coefficient of Variation):\n")
+print(site_variability_summary, n = Inf)
 
 repeat_temporal <- conus_data %>%
   group_by(Latitude, Longitude) %>%
-  filter(n() >= 3) %>%  # minimum 3 observations for meaningful CV
+  filter(n() >= 10) %>%  # minimum 10 observations for meaningful CV
   summarise(
     n_obs = n(),
     n_years = n_distinct(year, na.rm = TRUE),
@@ -920,7 +1055,7 @@ repeat_temporal <- repeat_temporal %>%
     log_cv_ratio = log2(cv_ratio_capped)  # log2 so 0 = equal, +1 = 2x short, -1 = 2x long
   )
 
-cat("Sites with temporal data (n >= 3 obs):", nrow(repeat_temporal), "\n")
+cat("Sites with temporal data (n >= 10 obs):", nrow(repeat_temporal), "\n")
 cat("Mean CV range:", round(min(repeat_temporal$mean_cv_all, na.rm = TRUE), 2), 
     "to", round(max(repeat_temporal$mean_cv_all, na.rm = TRUE), 2), "\n")
 cat("CV ratio (short/long) range:", round(min(repeat_temporal$cv_ratio, na.rm = TRUE), 2),
@@ -949,8 +1084,8 @@ p_cv_map <- ggplot() +
   ) +
   scale_size_continuous(
     name = "N Repeat\nObservations",
-    range = c(2, 12),
-    breaks = c(3, 5, 10, 20, 37)  # 37 = your actual max from repeat_sites
+    range = c(4, 8),
+    breaks = c(10, 20, 37)  # 37 = your actual max from repeat_sites
   ) +
   coord_sf(xlim = c(-125, -66), ylim = c(22, 50), crs = 4326) +
   labs(
@@ -969,7 +1104,7 @@ p_cv_map <- ggplot() +
     fill = guide_colorbar(order = 1, barheight = 8),
     size = guide_legend(order = 2)
   )
-
+p_cv_map
 
 # --- Step 4: Map B — Short-chain vs Long-chain CV Ratio ---
 
@@ -1020,14 +1155,14 @@ p_ratio_map <- ggplot() +
     fill = guide_colorbar(order = 1, barheight = 8),
     size = guide_legend(order = 2)
   )
-
+p_ratio_map
 
 # --- Step 5: Combine as patchwork ---
 
 p_temporal_combined <- p_cv_map / p_ratio_map +
   plot_annotation(
     title = "Temporal Variability as a Predictive Feature",
-    subtitle = paste0(nrow(repeat_temporal), " sites with 3+ repeat observations | ",
+    subtitle = paste0(nrow(repeat_temporal), " sites with 10+ repeat observations | ",
                       "Source persistence matters more than concentration"),
     theme = theme(
       plot.title = element_text(face = "bold", size = 20),
@@ -1038,10 +1173,99 @@ p_temporal_combined <- p_cv_map / p_ratio_map +
 ggsave("06_temporal_variability_maps.png", p_temporal_combined,
        width = 18, height = 16, dpi = 300)
 
+
+# Function to make a compound-specific CV map
+make_compound_cv_map <- function(compound_name, color_high = "#B2182B", subtitle_text = NULL) {
+  
+  # Compute per-site CV for this specific compound
+  site_cv <- conus_data %>%
+    group_by(Latitude, Longitude) %>%
+    filter(n() >= 10) %>%
+    summarise(
+      n_obs = n(),
+      n_detect = sum(!is.na(.data[[compound_name]]) & .data[[compound_name]] > 0),
+      cv = ifelse(
+        n_detect >= 2,
+        sd(.data[[compound_name]][.data[[compound_name]] > 0], na.rm = TRUE) /
+          mean(.data[[compound_name]][.data[[compound_name]] > 0], na.rm = TRUE),
+        NA_real_
+      ),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(cv), is.finite(cv))
+  
+  ggplot() +
+    geom_polygon(data = states, aes(x = long, y = lat, group = group),
+                 fill = "grey95", color = "grey60", linewidth = 0.2) +
+    geom_point(data = conus_data %>% distinct(Latitude, Longitude),
+               aes(x = Longitude, y = Latitude),
+               size = 0.2, alpha = 0.1, color = "grey50") +
+    geom_point(data = site_cv,
+               aes(x = Longitude, y = Latitude, size = n_obs, fill = cv),
+               shape = 21, color = "black", stroke = 0.3, alpha = 0.85) +
+    scale_fill_gradient(
+      low  = "#2C114F",
+      high = color_high,
+      name = "CV",
+      limits = c(0, 2),
+      oob = scales::squish
+    ) +
+    scale_size_continuous(
+      name = "N Obs",
+      range = c(4, 8),
+      breaks = c(10, 20, 37),
+      limits = c(10, 37)
+    ) +
+    coord_sf(xlim = c(-125, -66), ylim = c(22, 50), crs = 4326) +
+    labs(
+      title    = compound_name,
+      subtitle = subtitle_text,
+      x = NULL, y = NULL
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.title    = element_text(face = "bold", size = 13),
+      plot.subtitle = element_text(size = 9, color = "grey30"),
+      legend.position = "right",
+      axis.text = element_text(size = 7)
+    ) +
+    guides(
+      fill = guide_colorbar(barheight = 4),
+      size = guide_legend()
+    )
+}
+
+# Build the 4 compound maps
+p_pfoa  <- make_compound_cv_map("PFOA",  color_high = "#B2182B", subtitle_text = "Legacy long-chain")
+p_pfos  <- make_compound_cv_map("PFOS",  color_high = "#D6604D", subtitle_text = "Legacy long-chain")
+p_pfhxa <- make_compound_cv_map("PFHxA", color_high = "#4393C3", subtitle_text = "Short-chain replacement")
+p_pfhxs <- make_compound_cv_map("PFHxS", color_high = "#2166AC", subtitle_text = "Short-chain replacement")
+
+# Combine with patchwork
+# Top: full-width mean CV map
+# Bottom: 4 compound maps in a row
+p_combined <- p_cv_map /                              
+  (p_pfoa | p_pfos | p_pfhxa | p_pfhxs) +
+  plot_layout(heights = c(1.4, 1)) +
+  plot_annotation(
+    title    = "Temporal Variability as a Predictive Feature",
+    subtitle = paste0(nrow(repeat_temporal), " sites with 10+ repeat observations | ",
+                      "Legacy vs replacement PFAS source signatures"),
+    theme = theme(
+      plot.title    = element_text(face = "bold", size = 20),
+      plot.subtitle = element_text(size = 13, color = "grey30")
+    )
+  )
+p_combined
+ggsave("06_temporal_variability_maps.png", p_combined,
+       width = 20, height = 16, dpi = 300)
+cat("Saved: 06_temporal_variability_maps.png\n")
+
+
 # --- Step 6: Summary stats for your methods section ---
 
 cat("\n--- TEMPORAL VARIABILITY SUMMARY ---\n")
-cat("Sites with 3+ observations:", nrow(repeat_temporal), "\n")
+cat("Sites with 10+ observations:", nrow(repeat_temporal), "\n")
 cat("Median repeat observations per site:", median(repeat_temporal$n_obs), "\n")
 cat("Mean CV (overall):", round(mean(repeat_temporal$mean_cv_all, na.rm = TRUE), 3), "\n")
 cat("Mean CV (short-chain):", round(mean(repeat_temporal$mean_cv_short, na.rm = TRUE), 3), "\n")
@@ -1114,415 +1338,115 @@ cv_table %>%
   tab_source_note("CV = coefficient of variation (SD/mean); higher values indicate greater temporal variability")
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-#SCRIPT 2: DBSCAN CLUSTERING - METADATA vs. COMPOUNDS ONLY (No Predictors)
-
-library(dbscan)
-library(ggplot2)
-library(dplyr)
-library(tidyr)
-library(factoextra)
-library(patchwork)
-
-cat("DBSCAN CLUSTERING: METADATA vs COMPOUNDS (No Predictors)\n")
-# Define top detected compounds (adjust based on your detection analysis)
-top_compounds <- c("PFOS", "PFOA", "PFHxS", "PFBS", "PFNA", "PFHxA", "PFHpA", "PFDA",
-"PFPeA", "PFBA")
-
-# CLUSTERING APPROACH A: METADATA ONLY (Geography + Time)
-# Question: Do observations cluster by WHERE and WHEN, regardless of chemistry?
-# =======================================================================
-
-cat("--- APPROACH A: METADATA ONLY (Lat, Lon, Year, Month) ---\n\n")
-meta_data <- conus_data %>%
- select(Latitude, Longitude, year, month, dataset_source) %>%
- filter(!is.na(year), !is.na(month)) %>%
- mutate(
- site_id = paste(round(Latitude, 4), round(Longitude, 4), sep = "_")
- )
-# Scale metadata features
-meta_scaled <- scale(meta_data %>% select(Latitude, Longitude, year, month))
-# Determine optimal eps using k-nearest neighbor distance plot
-kNNdist_plot <- kNNdistplot(meta_scaled, k = 5)
-# Visual inspection: look for "elbow" in the distance curve
-# Run DBSCAN with multiple eps values for sensitivity analysis
-eps_values <- c(0.3, 0.5, 0.7, 1.0, 1.5)
-minPts_values <- c(5, 10, 20)
-dbscan_results_meta <- list()
-cat("Sensitivity Analysis - Metadata Clustering:\n")
-cat(sprintf("%-6s %-8s %-10s %-12s %-10s\n", "eps", "minPts", "Clusters", "Noise_Pct",
-"Largest"))
-for (eps in eps_values) {
- for (mp in minPts_values) {
- db <- dbscan(meta_scaled, eps = eps, minPts = mp)
- n_clusters <- length(unique(db$cluster[db$cluster > 0]))
- noise_pct <- round(sum(db$cluster == 0) / length(db$cluster) * 100, 1)
- largest <- if (n_clusters > 0) max(table(db$cluster[db$cluster > 0])) else 0
-
- cat(sprintf("%-6.1f %-8d %-10d %-12.1f %-10d\n", eps, mp, n_clusters, noise_pct, largest))
-
- dbscan_results_meta[[paste(eps, mp, sep = "_")]] <- list(
- eps = eps, minPts = mp, db = db,
- n_clusters = n_clusters, noise_pct = noise_pct
- )
- }
-}
-# Select best result (balance between too many clusters and too much noise)
-# Heuristic: choose result with noise between 10-30% and reasonable cluster count
-best_meta <- dbscan_results_meta[["0.5_10"]] # Adjust based on your output
-db_meta <- best_meta$db
-meta_data$cluster_meta <- db_meta$cluster
-cat("\n\nSelected Metadata Clustering (eps=0.5, minPts=10):\n")
-cat("Clusters:", best_meta$n_clusters, "\n")
-cat("Noise points:", sum(db_meta$cluster == 0), "\n")
-cat("Clustered points:", sum(db_meta$cluster > 0), "\n\n")
-# Characterize metadata clusters
-cat("Cluster Characterization (Metadata):\n")
-meta_cluster_summary <- meta_data %>%
- filter(cluster_meta > 0) %>%
- group_by(cluster_meta) %>%
- summarise(
- n = n(),
- mean_lat = round(mean(Latitude), 2),
- mean_lon = round(mean(Longitude), 2),
- mean_year = round(mean(year), 1),
- year_range = paste(min(year), max(year), sep = "-"),
- n_datasets = n_distinct(dataset_source),
- primary_dataset = names(sort(table(dataset_source), decreasing = TRUE))[1],
- .groups = "drop"
- ) %>%
- arrange(desc(n))
-print(meta_cluster_summary)
-# =======================================================================
-
-# CLUSTERING APPROACH B: COMPOUNDS ONLY (Chemical Fingerprint)
-# Question: Do observations cluster by WHAT chemicals are present?
-# =======================================================================
-
-cat("\n\n--- APPROACH B: COMPOUNDS ONLY (Chemical Fingerprints) ---\n\n")
-# Prepare compound data - use log-transformed concentrations
-compound_data <- conus_data %>%
- select(Latitude, Longitude, year, dataset_source, all_of(top_compounds)) %>%
- filter(if_any(all_of(top_compounds), ~ !is.na(.) & . > 0))
-# Log-transform and impute zeros with half-minimum detection
-compound_matrix <- compound_data %>%
- select(all_of(top_compounds)) %>%
- mutate(across(everything(), ~ {
- half_min <- min(.[. > 0], na.rm = TRUE) / 2
- log10(ifelse(is.na(.) | . <= 0, half_min, .) + 1)
- }))
-# Remove rows with all NAs
-valid_rows <- rowSums(!is.na(compound_matrix)) > 0
-compound_matrix <- compound_matrix[valid_rows, ]
-compound_data <- compound_data[valid_rows, ]
-# Scale compound features
-compound_scaled <- scale(compound_matrix)
-# Handle any remaining NAs (replace with 0 = mean after scaling)
-compound_scaled[is.na(compound_scaled)] <- 0
-# kNN distance plot for eps selection
-kNNdistplot(compound_scaled, k = 5)
-# Sensitivity analysis for compound clustering
-cat("Sensitivity Analysis - Compound Clustering:\n")
-cat(sprintf("%-6s %-8s %-10s %-12s %-10s\n", "eps", "minPts", "Clusters", "Noise_Pct",
-"Largest"))
-dbscan_results_chem <- list()
-for (eps in c(0.5, 0.8, 1.0, 1.5, 2.0)) {
- for (mp in c(5, 10, 20)) {
- db <- dbscan(compound_scaled, eps = eps, minPts = mp)
- n_clusters <- length(unique(db$cluster[db$cluster > 0]))
- noise_pct <- round(sum(db$cluster == 0) / length(db$cluster) * 100, 1)
- largest <- if (n_clusters > 0) max(table(db$cluster[db$cluster > 0])) else 0
-
- cat(sprintf("%-6.1f %-8d %-10d %-12.1f %-10d\n", eps, mp, n_clusters, noise_pct, largest))
-
- dbscan_results_chem[[paste(eps, mp, sep = "_")]] <- list(
- eps = eps, minPts = mp, db = db,
- n_clusters = n_clusters, noise_pct = noise_pct
- )
- }
-}
-# Select best compound clustering
-best_chem <- dbscan_results_chem[["1.0_10"]] # Adjust based on output
-db_chem <- best_chem$db
-compound_data$cluster_chem <- db_chem$cluster
-cat("\n\nSelected Compound Clustering (eps=1.0, minPts=10):\n")
-cat("Clusters:", best_chem$n_clusters, "\n")
-cat("Noise points:", sum(db_chem$cluster == 0), "\n\n")
-# Characterize chemical clusters
-cat("Cluster Chemical Profiles:\n")
-chem_cluster_profiles <- compound_data %>%
- filter(cluster_chem > 0) %>%
- group_by(cluster_chem) %>%
- summarise(
- n = n(),
- across(all_of(top_compounds), ~ median(., na.rm = TRUE), .names = "med_{.col}"),
- .groups = "drop"
- ) %>%
- arrange(desc(n))
-print(chem_cluster_profiles)
-# =======================================================================
-
-# COMPARISON: Do metadata clusters align with chemical clusters?
-# =======================================================================
-
-cat("\n\n--- CROSS-COMPARISON: Metadata vs Chemical Clusters ---\n\n")
-# Merge both cluster assignments (for overlapping observations)
-comparison_data <- compound_data %>%
- left_join(
- meta_data %>% select(Latitude, Longitude, year, cluster_meta),
- by = c("Latitude", "Longitude", "year")
- ) %>%
- filter(!is.na(cluster_meta), cluster_meta > 0, cluster_chem > 0)
-if (nrow(comparison_data) > 0) {
- cross_tab <- table(
- Meta = comparison_data$cluster_meta,
- Chem = comparison_data$cluster_chem
- )
- cat("Cross-tabulation (Metadata Cluster vs Chemical Cluster):\n")
- print(cross_tab)
-
- # Adjusted Rand Index for cluster agreement
- if (requireNamespace("mclust", quietly = TRUE)) {
- ari <- mclust::adjustedRandIndex(comparison_data$cluster_meta,
-comparison_data$cluster_chem)
- cat("\nAdjusted Rand Index:", round(ari, 4), "\n")
- cat("Interpretation: 0 = random, 1 = perfect agreement\n")
- cat("If low: Geography/time and chemistry tell DIFFERENT stories\n")
- cat("If high: Chemical fingerprints are spatially/temporally determined\n")
- }
-}
-# =======================================================================
-
-# VISUALIZATION: Dual-panel cluster maps
-# =======================================================================
-
-states <- map_data("state")
-p_cluster_meta <- ggplot() +
- geom_polygon(data = states, aes(x = long, y = lat, group = group),
- fill = "grey95", color = "grey70", linewidth = 0.2) +
- geom_point(data = meta_data %>% filter(cluster_meta > 0),
- aes(x = Longitude, y = Latitude, color = factor(cluster_meta)),
- size = 1.5, alpha = 0.6) +
- geom_point(data = meta_data %>% filter(cluster_meta == 0),
- aes(x = Longitude, y = Latitude),
- size = 0.5, alpha = 0.2, color = "grey50") +
- coord_sf(xlim = c(-125, -66), ylim = c(24, 50)) +
- labs(title = "A) Metadata Clusters (Geography + Time)",
- subtitle = "Grey = noise points", color = "Cluster") +
- theme_minimal(base_size = 11) +
- theme(legend.position = "bottom")
-p_cluster_chem <- ggplot() +
- geom_polygon(data = states, aes(x = long, y = lat, group = group),
- fill = "grey95", color = "grey70", linewidth = 0.2) +
- geom_point(data = compound_data %>% filter(cluster_chem > 0),
- aes(x = Longitude, y = Latitude, color = factor(cluster_chem)),
- size = 1.5, alpha = 0.6) +
- geom_point(data = compound_data %>% filter(cluster_chem == 0),
- aes(x = Longitude, y = Latitude),
- size = 0.5, alpha = 0.2, color = "grey50") +
- coord_sf(xlim = c(-125, -66), ylim = c(24, 50)) +
- labs(title = "B) Chemical Fingerprint Clusters (Compounds Only)",
- subtitle = "Grey = noise points", color = "Cluster") +
- theme_minimal(base_size = 11) +
- theme(legend.position = "bottom")
-p_dual_cluster <- p_cluster_meta / p_cluster_chem +
- plot_annotation(
- title = "DBSCAN Clustering: Metadata vs. Chemical Fingerprints",
- subtitle = "Key Question: Does observation geometry drive chemical patterns?",
- theme = theme(plot.title = element_text(face = "bold", size = 14))
- )
-ggsave("05_dbscan_dual_comparison.png", p_dual_cluster, width = 14, height = 14, dpi = 300)
-# Save cluster assignments
-saveRDS(list(
- meta_clusters = meta_data,
- chem_clusters = compound_data,
- meta_params = list(eps = best_meta$eps, minPts = 10),
- chem_params = list(eps = best_chem$eps, minPts = 10)
-), "dbscan_cluster_results.rds")
-cat("\nSaved: dbscan_cluster_results.rds\n")
-cat("Saved: 05_dbscan_dual_comparison.png\n")
-
-#------------GEt COMIDS-----------------------------
-
+#------------GET COMIDS-----------------------------
+#this takes awhile because of the nhdplusTools step
 library(sf)
 library(dplyr)
-library(future.apply)
 library(nhdplusTools)
-setwd("C:/Users/Marston User/Documents/CONUS_PFAS")
-# reuse saved COMIDs
-if (file.exists("conus_datasets_streamcat.rds")) {
-  
-  saved <- readRDS("conus_datasets_streamcat.rds") %>%
-    select(Latitude, Longitude, COMID) %>%
-    filter(!is.na(COMID)) %>%
-    distinct(Latitude, Longitude, .keep_all = TRUE)
-  
-  conus_data <- conus_data %>%
-    left_join(saved, by = c("Latitude", "Longitude"))
-  
-  cat("COMIDs from saved file:",
-      sum(!is.na(conus_data$COMID)),
-      "/", nrow(conus_data), "\n")
-  
-} else {
-  
-  conus_data$COMID <- NA_integer_
-}
-
-# indices needing COMIDs
-missing_idx <- which(is.na(conus_data$COMID))
-
-cat("Fetching COMIDs for",
-    length(missing_idx),
-    "new points\n")
-
-
-valid_coords <- which(
-  !is.na(conus_data$Longitude) &
-    !is.na(conus_data$Latitude)
-)
-
-# make sf object only for valid rows
-conus_data_sf <- st_as_sf(
-  conus_data[valid_coords, ],
-  coords = c("Longitude", "Latitude"),
-  crs = 4326,
-  remove = FALSE
-)
-
-# rows still needing COMIDs AND valid coords
-missing_idx <- which(
-  is.na(conus_data$COMID) &
-    !is.na(conus_data$Longitude) &
-    !is.na(conus_data$Latitude)
-)
-
-# map original row indices -> sf row indices
-sf_match <- match(missing_idx, valid_coords)
-
-pts_missing <- conus_data_sf[sf_match, ]
-
-get_comid <- function(pt,
-                      max_tries = 3,
-                      base_sleep = 0.2) {
-  
-  for (t in seq_len(max_tries)) {
-    
-    Sys.sleep(base_sleep * t)
-    
-    res <- tryCatch(
-      nhdplusTools::discover_nhdplus_id(pt),
-      error = function(e) NULL
-    )
-    
-    if (!is.null(res) && length(res) > 0) {
-      
-      if (is.atomic(res))
-        return(as.integer(res[[1]]))
-      
-      if (is.data.frame(res) &&
-          "comid" %in% names(res))
-        return(as.integer(res$comid[1]))
-      
-      if (is.list(res) &&
-          !is.null(res$comid))
-        return(as.integer(res$comid))
-    }
-  }
-  
-  NA_integer_
-}
-
-library(sf)
-library(dplyr)
-library(future.apply)
 library(progressr)
 
 handlers(global = TRUE)
 handlers("progress")
 
-plan(multisession, workers = 4)
+setwd("C:/Users/Marston User/Documents/CONUS_PFAS")
 
-# saving comid in chunks of 100
-# so if the code crashes, it still gets saved
-chunk_size <- 100
+# --- Resume from partial save ---
 save_file <- "conus_data_partial_comids.rds"
 
-# rows still missing COMIDs
-missing_idx <- which(
-  is.na(conus_data$COMID) &
-    !is.na(conus_data$Longitude) &
-    !is.na(conus_data$Latitude)
-)
+if (file.exists(save_file)) {
+  conus_data_saved <- readRDS(save_file)
+  
+  comid_lookup <- conus_data_saved %>%
+    filter(!is.na(COMID)) %>%
+    mutate(lat_round = round(Latitude, 6), lon_round = round(Longitude, 6)) %>%
+    distinct(lat_round, lon_round, .keep_all = TRUE) %>%
+    select(lat_round, lon_round, COMID)
+  
+  conus_data <- conus_data %>%
+    select(-any_of("COMID")) %>%
+    mutate(lat_round = round(Latitude, 6), lon_round = round(Longitude, 6)) %>%
+    left_join(comid_lookup, by = c("lat_round", "lon_round")) %>%
+    select(-lat_round, -lon_round)
+  
+  cat("Resumed COMIDs:", sum(!is.na(conus_data$COMID)), "/", nrow(conus_data), "\n")
+  rm(conus_data_saved, comid_lookup)
+}
 
-# split into chunks
-chunks <- split(
-  missing_idx,
-  ceiling(seq_along(missing_idx) / chunk_size)
-)
+if (!"COMID" %in% names(conus_data)) conus_data$COMID <- NA_integer_
 
-# progress bar
+# --- Deduplicate: only fetch once per unique location ---
+unique_sites <- conus_data %>%
+  filter(is.na(COMID), !is.na(Latitude), !is.na(Longitude)) %>%
+  distinct(Latitude, Longitude) %>%
+  mutate(site_id = row_number())
+
+cat("Unique locations needing COMIDs:", nrow(unique_sites), "\n")
+cat("(Saves fetching duplicates — original missing rows may be much higher)\n\n")
+
+# Convert only the sites we need to sf
+sites_sf <- st_as_sf(unique_sites, coords = c("Longitude", "Latitude"),
+                     crs = 4326, remove = FALSE)
+
+# --- Fetch function ---
+get_comid <- function(pt, max_tries = 3, base_sleep = 0.3) {
+  for (t in seq_len(max_tries)) {
+    Sys.sleep(base_sleep * t)
+    res <- tryCatch(
+      discover_nhdplus_id(pt),
+      error   = function(e) NULL,
+      warning = function(w) NULL
+    )
+    if (!is.null(res) && length(res) > 0) {
+      if (is.atomic(res)) return(as.integer(res[[1]]))
+      if (is.data.frame(res) && "comid" %in% names(res)) return(as.integer(res$comid[1]))
+      if (is.list(res) && !is.null(res$comid)) return(as.integer(res$comid))
+    }
+  }
+  NA_integer_
+}
+
+# --- Sequential loop with chunked saves ---
+chunk_size <- 50
+chunks <- split(seq_len(nrow(sites_sf)), ceiling(seq_len(nrow(sites_sf)) / chunk_size))
+
+unique_sites$COMID <- NA_integer_
+
 with_progress({
+  p <- progressor(steps = nrow(sites_sf))
   
-  p <- progressor(steps = length(missing_idx))
-  
-  # loop through chunks
   for (j in seq_along(chunks)) {
+    idx <- chunks[[j]]
     
-    idx_chunk <- chunks[[j]]
+    for (i in idx) {
+      unique_sites$COMID[i] <- get_comid(sites_sf[i, ])
+      p()
+    }
     
-    # map original indices to sf rows
-    sf_match <- match(idx_chunk, valid_coords)
+    # Autosave — update only NA positions, never overwrite existing COMIDs
+    comid_lookup_new <- unique_sites %>%
+      filter(!is.na(COMID)) %>%
+      select(Latitude, Longitude, COMID)
     
-    pts_chunk <- conus_data_sf[sf_match, ]
-    
-    # parallel fetch
-    comids <- future_sapply(
-      seq_len(nrow(pts_chunk)),
-      function(i) {
-        
-        result <- get_comid(pts_chunk[i, ])
-        
-        p()
-        
-        result
-      },
-      future.seed = TRUE
+    match_idx <- match(
+      paste(round(conus_data$Latitude, 6), round(conus_data$Longitude, 6)),
+      paste(round(comid_lookup_new$Latitude, 6), round(comid_lookup_new$Longitude, 6))
     )
     
-    # write back to conus_data
-    conus_data$COMID[idx_chunk] <- comids
+    fill_rows <- which(!is.na(match_idx) & is.na(conus_data$COMID))
+    conus_data$COMID[fill_rows] <- comid_lookup_new$COMID[match_idx[fill_rows]]
     
-    # autosave after every chunk
     saveRDS(conus_data, save_file)
-    
-    cat(
-      "Chunk", j, "/",
-      length(chunks),
-      "saved\n"
-    )
+    cat("Chunk", j, "/", length(chunks), "| COMIDs so far:",
+        sum(!is.na(conus_data$COMID)), "\n")
   }
 })
 
-plan(sequential)
-
-cat("Finished\n")
-
-cat("COMIDs assigned:", sum(!is.na(water$COMID)), "/", nrow(water), "\n\n")
+cat("COMIDs assigned:", sum(!is.na(conus_data$COMID)), "/", nrow(conus_data), "\n")
+cat("Negative COMIDs (sink/isolated):", sum(conus_data$COMID < 0, na.rm = TRUE), "\n")
 saveRDS(conus_data, "conus_datasets_COMID.rds")
-#------------Gather StreamCat information-------------------------
+
+#------------Get StreamCat information-------------------------
+library(StreamCatTools)
 
 unique_comids <- unique(na.omit(conus_data$COMID))
 cat("pulling StreamCat for", length(unique_comids), "COMIDs\n")
@@ -1533,6 +1457,21 @@ sc_list   <- list()
 # pull streamcat data. Doesn't take too long as long as the streamcat website isn't down
 # if you get an http or url error, it is probably because the website is temporarily down
 # try again in an hour, usually it's only down for a little bit.
+# streamcat variable names used as predictors
+streamcat_request <- c(
+  "pctagdrainage", "pctimp2019",  "pctbl2019",   "pctcrop2019",
+  "pctdecid2019",  "pcthbwet2019","npdesdens",   "huden2010",
+  "canaldens",     "minedens",    "coalminedens","manure",
+  "fert",          "damdens", "septic", "bfi",
+  "superfunddens", "tridens")
+
+# variables at a watershed scale "_ws"
+streamcat_metrics <- c(
+  "pctagdrainagews", "pctimp2019ws",   "pctbl2019ws",    "pctcrop2019ws",
+  "pctdecid2019ws",  "pcthbwet2019ws", "npdesdensws",    "huden2010ws",
+  "canaldensws",     "minedensws",     "coalminedensws", "manurews",
+  "fertws",          "damdensws", "septicws", "bfiws",
+  "superfunddensws", "tridensws")
 
 for (i in seq_along(sc_chunks)) {
   message("StreamCat chunk ", i, " / ", length(sc_chunks))
@@ -1554,17 +1493,359 @@ streamcat_df$comid  <- as.integer(streamcat_df$comid)
 streamcat_df        <- streamcat_df[!duplicated(streamcat_df$comid), ]
 
 conus_data <- conus_data %>% left_join(as.data.frame(streamcat_df), by = c("COMID" = "comid"))
-conus_data_nozero <- conus_data_nozero %>% left_join(as.data.frame(streamcat_df), by = c("COMID" = "comid"))
 
 sc_preds_found <- intersect(streamcat_metrics, names(conus_data))
 cat("StreamCat metrics joined:", length(sc_preds_found), "/", length(streamcat_metrics), "\n\n")
 
 saveRDS(conus_data,        "conus_datasets_streamcat_all.rds")
-saveRDS(conus_data_nozero, "conus_datasets_streamcat_nozero.rds")
 
-#setting up the rf and xgboost model functions
+#temporal variation of sites with most observations
+#using Hydro DL for daily discharge 
+# Top sites by observation count
+
+repeat_sites_full <- conus_data %>%
+  filter(!is.na(COMID)) %>%
+  group_by(COMID) %>%
+  mutate(n_obs = n()) %>%
+  ungroup() %>%
+  filter(n_obs > 1) %>%
+  arrange(desc(n_obs))
+
+repeat_sites_full %>%
+  distinct(COMID, dataset_source, .keep_all = TRUE) %>%
+  arrange(desc(n_obs)) %>%
+  select(COMID, dataset_source, n_obs) %>%
+  print(n = 30)
+
+repeat_sites_full <- repeat_sites_full %>% 
+  filter(!(COMID == 4480911 & dataset_source == "Breitmeyer_2023"))
+#i'm dropping one comid from Breitmeyer, since it is the same observation in the caravan dataset
+# Step 1: identify the top 16 COMIDs
+top_comids <- repeat_sites_full %>%
+  distinct(COMID, dataset_source, .keep_all = TRUE) %>%
+  filter(
+    n_obs >= 35,
+    dataset_source != "NH_DES_2026"
+  ) %>%
+  arrange(desc(n_obs)) %>%
+  distinct(COMID) %>%  # add this to remove duplicate COMIDs
+  pull(COMID)
+
+# Step 2: filter repeat_sites_full to only those COMIDs, keeping all rows
+top_12_repeat_sites <- repeat_sites_full %>%
+  filter(COMID %in% top_comids,
+         dataset_source != "NH_DES_2026")
+
+library(tidyverse)
+library(patchwork)
+
+compounds_of_interest <- c("PFOA", "PFOS", "PFHxA", "PFHxS")
+
+pfas_long <- top_12_repeat_sites %>%
+  mutate(date = as.Date(`Sample Date (MM/DD/YYY)`, format = "%m/%d/%Y")) %>%
+  filter(!is.na(date)) %>%
+  select(COMID, dataset_source, date, year, month,
+         Latitude, Longitude, n_obs,
+         all_of(compounds_of_interest)) %>%
+  pivot_longer(
+    cols = all_of(compounds_of_interest),
+    names_to  = "compound",
+    values_to = "concentration_ngL"
+  ) %>%
+  filter(!is.na(concentration_ngL)) %>%
+  filter(concentration_ngL > 0) %>%           # remove non-detects
+  mutate(compound = factor(compound,           # fix legend duplicates
+                           levels = compounds_of_interest))  # drops compounds not measured at a site
+# Color palette — legacy vs replacement compound pairs
+compounds_of_interest <- c("PFOA", "PFOS", "PFHxA", "PFHxS")
+
+compound_colors <- c(
+  "PFOA"  = "#1D3557",
+  "PFOS"  = "#E63946",
+  "PFHxA" = "#2A9D8F",
+  "PFHxS" = "#E76F51"
+)
+
+pfas_long <- pfas_long %>%
+  mutate(compound = factor(compound, levels = compounds_of_interest))
+
+plot_one_site <- function(cid, data = pfas_long) {
+  
+  df <- data %>% filter(COMID == cid)
+  site_label <- df %>% 
+    slice(1) %>% 
+    pull(dataset_source)
+  n <- df %>% 
+    filter(!is.na(concentration_ngL)) %>% 
+    distinct(date) %>% 
+    nrow()
+  
+  ggplot(df, aes(date, concentration_ngL, 
+                 color = compound, group = compound)) +
+    geom_point(size = 2, alpha = 0.85) +
+    geom_line(alpha = 0.4, linewidth = 0.5) +
+    scale_y_continuous(trans  = "log1p",
+                       breaks = c(0, 1, 10, 100, 1000),
+                       labels = c("0", "1", "10", "100", "1000")) +
+    scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+    scale_color_manual(values = compound_colors,
+                       breaks = compounds_of_interest) +
+    labs(
+      title    = paste0(site_label, " | COMID: ", cid),
+      subtitle = paste0(n, " sampling events"),
+      x        = NULL,
+      y        = "ng/L (log scale)",
+      color    = NULL
+    ) +
+    theme_minimal(base_size = 9) +
+    theme(
+      legend.position  = "bottom",
+      panel.grid.minor = element_blank(),
+      plot.title       = element_text(face = "bold", size = 9),
+      plot.subtitle    = element_text(size = 7, color = "grey50"),
+      axis.text.x      = element_text(angle = 45, hjust = 1)
+    )
+}
+comid_list <- top_12_repeat_sites %>%
+  distinct(COMID) %>%
+  pull(COMID)
+
+# Build list of plots
+plot_list <- map(comid_list, plot_one_site)
+
+# Combine — shared legend, 3 columns
+wrap_plots(plot_list, ncol = 3) +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title    = "PFAS Concentrations Over Time — Repeat Sampling Sites",
+    subtitle = paste0(length(comid_list), " sites | compounds: ", 
+                      paste(compounds_of_interest, collapse = ", ")),
+    theme    = theme(
+      plot.title    = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(size = 10, color = "grey40")
+    )
+  ) &
+  theme(legend.position = "bottom")
+
+ggsave("pfas_repeat_sites_timeseries.png", 
+       width = 18, height = ceiling(length(comid_list) / 3) * 4,
+       dpi = 150)
+
+#now going to get flow for my top 12 sites
+#for some reason i'm not able to get Python to work on this computer
+#so i'm getting these csv files by hand. I'll figure this out soon
+#because scalling up to more sites is the goal
+top_comids
+
+merit_lookup <- tribble(
+  ~COMID,     ~merit_id,   ~site_label,
+  8834930,    73011897,    "Petre_2022", #right on a gage. above a hydropower plant. drinking water intake for city of Wilmington
+  8891732,    73009221,    "Petre_2022", #right on a gage.
+  8897934,    73009718,    "Petre_2022", #right on a gage.
+  4782171,    73005923,    "Caravan_PFAS", #right on a gage!
+  4782163,    73005871,    "Caravan_PFAS", #a couple reaches upstream of a gage
+  5876425,    NA,          "MA_PWS_2026", #not on hydroDL. reservoir, not river
+  6745188,    73002560,    "MA_PWS_2026",
+  6745806,    73002486,    "NH_DES_2026",
+  6746428,    NA,          "NH_DES_2026", #a small trib that flows into comid 6745806. Not on Hydro DL
+  6744318,    NA,          "NH_DES_2026", #too small of a stream. not on HydroDL
+ 19335013,    NA,          "NH_DES_2026", #too small of a stream. It's a trib right upstream of a gage, which is cool though
+  6745812,    73002486,    "NH_DES_2026", #located upstream of COMID 6745806 on the same mainstem river
+ 13153971,    74031638,    "Caravan_PFAS", #right below a gage!
+  4782187,    73005871,    "Caravan_PFAS", #right on a gage!
+  4782629,    73006192,    "Caravan_PFAS", #mainstem, above phillidelphia
+  4483015,    73005895,    "Caravan_PFAS", #on a trib near a gage. useful
+  4480911,    73005780,    "Caravan_PFAS", #right on a USGS gage. Can use this at the end as a streamflow validation site
+)
+
+reach_4480911  = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/4480911_73005780_history_series.csv")
+reach_4483015  = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/4483015_73005895_history_series.csv")
+reach_4782629  = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/4782629_73006192_history_series.csv")
+reach_4782187  = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/4782187_73005871_history_series.csv")
+reach_13153971 = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/13153971_74031638_history_series.csv")
+reach_6745812  = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/6745806_73002486_Flow_history_series.csv")
+reach_6745806  = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/6745806_73002486_Flow_history_series.csv")
+reach_6745188  = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/6745188_73002560_Flow_history_series.csv")
+reach_8834930  = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/8834930_73011897_history_series.csv")
+reach_8891732  = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/8891732_73009221_history_series.csv")
+reach_8897934  = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/8897934_73009718_history_series.csv")
+reach_4782171  = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/4782171_73005923_history_series.csv")
+reach_4782163  = read.csv("https://raw.githubusercontent.com/rvera177/CONUS_PFAS/refs/heads/main/Data/HydroDL%20flow%20data/4782163_73005871_history_series.csv")
+
+discharge_long <- bind_rows(
+  reach_4480911  %>% mutate(COMID = 4480911),
+  reach_4483015  %>% mutate(COMID = 4483015),
+  reach_4782629  %>% mutate(COMID = 4782629),
+  reach_4782187  %>% mutate(COMID = 4782187),
+  reach_13153971 %>% mutate(COMID = 13153971),
+  reach_6745812  %>% mutate(COMID = 6745812),
+  reach_6745806  %>% mutate(COMID = 6745806),
+  reach_6745188  %>% mutate(COMID = 6745188),
+  reach_8834930  %>% mutate(COMID = 8834930),
+  reach_8891732  %>% mutate(COMID = 8891732),
+  reach_8897934  %>% mutate(COMID = 8897934),
+  reach_4782171  %>% mutate(COMID = 4782171), 
+  reach_4782163  %>% mutate(COMID = 4782163)
+) %>%
+  mutate(date = as.Date(Date)) %>%
+  select(COMID, date, Flow_cms = Flow)
+
+pfas_with_q <- pfas_long %>%
+  left_join(discharge_long, by = c("COMID", "date"))
+
+pfas_with_q %>% #check how many of the top 12 actualy have pfas and flow data now
+  group_by(COMID) %>%
+  summarise(
+    n_pfas        = n(),
+    n_with_flow   = sum(!is.na(Flow_cms)),
+    pct_matched   = round(n_with_flow / n_pfas * 100, 1)
+  )
+
+plot_one_site_flow <- function(cid, data = pfas_with_q) {
+  
+  # PFAS observations
+  pfas_df <- pfas_with_q %>%
+    filter(COMID == cid)
+  # define PFAS time window
+  date_min <- min(pfas_df$date, na.rm = TRUE)
+  date_max <- max(pfas_df$date, na.rm = TRUE)
+  
+  # FULL DAILY FLOW RECORD (trimmed to PFAS window)
+  flow_df <- discharge_long %>%
+    filter(COMID == cid,
+           date >= date_min,
+           date <= date_max)
+  
+  site_label <- pfas_df %>%
+    slice(1) %>%
+    pull(dataset_source)
+  
+  n_events <- pfas_df %>%
+    distinct(date) %>%
+    nrow()
+  
+  has_flow <- nrow(flow_df) > 0
+  
+  # Base PFAS plot
+  p <- ggplot(pfas_df,
+              aes(date, concentration_ngL,
+                  color = compound,
+                  group = compound)) +
+    geom_point(size = 2, alpha = 0.85) +
+    geom_line(alpha = 0.4) +
+    scale_color_manual(values = compound_colors) +
+    scale_y_continuous(
+      trans = "log1p",
+      breaks = c(0,1,10,100,1000),
+      labels = c("0","1","10","100","1000")
+    ) +
+    labs(
+      title = paste0(site_label, " | COMID: ", cid),
+      subtitle = paste0(
+        n_events,
+        " sampling events",
+        ifelse(has_flow, " | Flow available", " | No flow data")
+      ),
+      x = NULL,
+      y = "PFAS (ng/L)",
+      color = NULL
+    ) +
+    theme_minimal(base_size = 9) +
+    theme(
+      legend.position = "bottom",
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+  
+  # Add flow only when available
+  if(has_flow){
+    
+    flow_max <- max(flow_df$Flow_cms, na.rm = TRUE)
+    pfas_max <- max(pfas_df$concentration_ngL, na.rm = TRUE)
+    
+    scale_factor <- pfas_max / flow_max
+    
+    p <- p +
+      geom_line(
+        data = flow_df,
+        aes(x = date, y = Flow_cms * scale_factor),
+        inherit.aes = FALSE,
+        color = "black",
+        linewidth = 0.4,
+        alpha = 0.8
+      ) +
+      scale_y_continuous(
+        trans = "log1p",
+        sec.axis = sec_axis(~ . / scale_factor, name = "Flow (cms)")
+      )
+  }
+  
+  p
+}
+
+plot_list <- map(comid_list, plot_one_site_flow)
+
+wrap_plots(plot_list, ncol = 3) +
+  plot_layout(guides = "collect")
+
+
+# see the full range including positive correlations
+# visualize the correlation gradient
+pfas_with_q %>%
+  filter(!is.na(Flow_cms), concentration_ngL > 0) %>%
+  group_by(COMID, compound) %>%
+  summarise(
+    cor_pearson = cor(log(Flow_cms), log(concentration_ngL),
+                      method = "pearson", use = "complete.obs"),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  filter(n >= 10) %>%
+  left_join(distinct(repeat_sites_full, COMID, dataset_source), 
+            by = "COMID") %>%
+  ggplot(aes(x = reorder(paste(COMID, compound), cor_pearson),
+             y = cor_pearson,
+             fill = dataset_source)) +
+  geom_col() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Pearson Correlation: log(Flow) vs log(PFAS Concentration)",
+    subtitle = "All negative = dilution-dominated across all sites",
+    x = NULL,
+    y = "Pearson r",
+    fill = "Dataset"
+  ) +
+  theme_minimal()
+
+#---------Hydrology context!-------------
+#adds the hydrologic context of the site by looking at the prior 1 week and prior month
+
+discharge_long <- discharge_long %>%
+  arrange(COMID, date) %>%
+  group_by(COMID) %>%
+  mutate(
+    flow_7day  = zoo::rollmean(Flow_cms, 7,  fill = NA, align = "right"),
+    flow_30day = zoo::rollmean(Flow_cms, 30, fill = NA, align = "right"),
+    # seasonal mean flow for that day of year
+    doy = as.integer(format(date, "%j")),
+    # flow anomaly = how unusual is today's flow vs seasonal norm
+  ) %>%
+  group_by(COMID, doy) %>%
+  mutate(
+    flow_seasonal_mean = mean(Flow_cms, na.rm = TRUE),
+    flow_anomaly       = (Flow_cms - flow_seasonal_mean) / 
+      sd(Flow_cms, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+
+#----------rf and xgboost functions--------------------
 library(doParallel)
 library(foreach)
+library(FNN)
+library(blockCV)
+library(sf)
 
 run_model <- function(conus_data_input,
                       suffix = "all",
@@ -1572,109 +1853,163 @@ run_model <- function(conus_data_input,
                       hotspot_weight = FALSE,
                       hotspot_quantile = 0.9,
                       hotspot_boost = 5,
-                      nfolds = 10,
+                      weightfolds = 10,
+                      nfolds = 5, #number of folds for spatial blocks
+                      min_obs = 100, #minumum observations per compound needed for a model
+                      block_size_m = 500000,   # 500km spatial blocks
                       seed = 2026) {
   
   library(dplyr)
   model_type <- match.arg(model_type)
   
   # Setup parallel backend
-  n_cores <- detectCores() - 2  # leave 2 free for system stability
+  n_cores <- detectCores() - 2
   cl <- makeCluster(n_cores)
   registerDoParallel(cl)
-  on.exit(stopCluster(cl))  # ensures cluster closes even if function errors
+  on.exit(stopCluster(cl))
   
   cat("Running on", n_cores, "cores\n")
   
-  conus_data_input <- conus_data_input %>%
-    group_by(source) %>%
-    mutate(weight = 1 / sqrt(n())) %>%
-    ungroup()
+  # ==============================================
+  # SPATIAL DENSITY WEIGHTS
+  # ==============================================
+  # Points in dense clusters get down-weighted
+  # Points in sparse regions get up-weighted
+  coords <- conus_data_input %>%
+    dplyr::select(Longitude, Latitude) %>%
+    as.matrix()
+  
+  knn_dist    <- FNN::knn.dist(coords, k = weightfolds)
+  mean_knn_dist <- rowMeans(knn_dist)
+  
+  # Normalize so weights have mean = 1 (keeps scale interpretable)
+  spatial_weight <- mean_knn_dist / mean(mean_knn_dist)
   
   conus_data_input <- conus_data_input %>%
-    mutate(across(all_of(all_pfas), ~ log10(.x + 1)))
+    mutate(weight = spatial_weight)
   
-  preds_all <- c(sc_preds_found)
-  preds_df <- water_input %>%
-    dplyr::select(all_of(preds_all))
+  cat("Spatial weights computed | range:",
+      round(min(spatial_weight), 3), "to",
+      round(max(spatial_weight), 3), "\n")
+  
+  # ==============================================
+  # SPATIAL BLOCK CV FOLDS
+  # ==============================================
+  cat("Computing spatial block CV folds...\n")
+  
+  sf_data <- conus_data_input %>%
+    st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326) %>%
+    st_transform(5070)   # Albers Equal Area — proper meters for CONUS
   
   set.seed(seed)
-  folds <- sample(rep(1:nfolds, length.out = nrow(conus_data_input)))
+  spatial_folds <- cv_spatial(
+    x         = sf_data,
+    k         = nfolds,
+    size      = block_size_m,
+    selection = "random",
+    seed      = seed,
+    progress  = FALSE
+  )
   
-  cat("\n", model_type, "|", nfolds, "-fold CV [", suffix, ", n =", nrow(water_input), "]\n")
+  folds <- spatial_folds$folds_ids
   
+  cat("Spatial blocks assigned | fold sizes:\n")
+  print(table(folds))
+  
+  # ==============================================
+  # LOG TRANSFORM PFAS
+  # ==============================================
+  conus_data_input <- conus_data_input %>%
+    mutate(across(any_of(all_pfas), ~ log10(.x + 1)))
+  
+  preds_all <- c(sc_preds_found)
+  preds_df  <- conus_data_input %>%
+    dplyr::select(all_of(preds_all))
+  
+  cat("\n", model_type, "|", nfolds, "-fold spatial block CV [",
+      suffix, ", n =", nrow(conus_data_input), "]\n")
+  
+  # ==============================================
   # PARALLEL COMPOUND LOOP
+  # ==============================================
   results_list <- foreach(
     compound = all_pfas,
     .packages = c("dplyr", "randomForest", "xgboost"),
-    .errorhandling = "pass"  # if one compound fails, others continue
+    .errorhandling = "pass"
   ) %dopar% {
     
     outcome <- conus_data_input[[compound]]
     
-    if (sum(!is.na(outcome)) < 150) {
+    if (sum(!is.na(outcome)) < min_obs) {
       return(list(compound = compound, skipped = TRUE))
     }
     
     weights <- conus_data_input$weight
     
     if (hotspot_weight) {
-      thresh <- quantile(outcome, hotspot_quantile, na.rm = TRUE)
+      thresh       <- quantile(outcome, hotspot_quantile, na.rm = TRUE)
       hotspot_mult <- ifelse(outcome >= thresh, hotspot_boost, 1)
-      weights <- weights * hotspot_mult
+      weights      <- weights * hotspot_mult
     }
     
     cv_preds <- rep(NA_real_, nrow(conus_data_input))
     
     for (fold in 1:nfolds) {
       
-      test_idx <- which(folds == fold)
+      test_idx  <- which(folds == fold)
       train_idx <- which(folds != fold)
       
       train_x <- preds_df[train_idx, , drop = FALSE]
       train_y <- outcome[train_idx]
       train_w <- weights[train_idx]
       
-      valid <- complete.cases(train_x) & !is.na(train_y)
+      valid   <- complete.cases(train_x) & !is.na(train_y)
       train_x <- train_x[valid, , drop = FALSE]
       train_y <- train_y[valid]
       train_w <- train_w[valid]
       
       if (length(unique(train_y)) < 2 || nrow(train_x) < 20) next
       
+      # Impute missing predictors with training fold median
+      train_medians <- sapply(train_x, median, na.rm = TRUE)
       for (col in names(train_x)) {
-        med_val <- median(train_x[[col]], na.rm = TRUE)
-        train_x[[col]][is.na(train_x[[col]])] <- med_val
+        train_x[[col]][is.na(train_x[[col]])] <- train_medians[[col]]
       }
       
       test_x <- preds_df[test_idx, , drop = FALSE]
       for (col in names(test_x)) {
-        med_val <- median(train_x[[col]], na.rm = TRUE)
-        test_x[[col]][is.na(test_x[[col]])] <- med_val
+        # Use training median for test imputation — no leakage
+        test_x[[col]][is.na(test_x[[col]])] <- train_medians[[col]]
       }
       
       if (model_type == "rf") {
         fit <- randomForest::randomForest(
-          x = train_x, y = train_y,
-          ntree = 500,
-          mtry = max(1, floor(ncol(train_x) / 3)),
+          x         = train_x,
+          y         = train_y,
+          ntree     = 500,
+          mtry      = max(1, floor(ncol(train_x) / 3)),
           importance = TRUE,
-          weights = train_w
+          weights   = train_w
         )
         preds <- predict(fit, newdata = test_x)
       }
       
       if (model_type == "xgb") {
         dtrain <- xgboost::xgb.DMatrix(
-          data = as.matrix(train_x), label = train_y, weight = train_w
+          data   = as.matrix(train_x),
+          label  = train_y,
+          weight = train_w
         )
         dtest <- xgboost::xgb.DMatrix(data = as.matrix(test_x))
-        fit <- xgboost::xgb.train(
-          data = dtrain, nrounds = 300,
+        fit   <- xgboost::xgb.train(
+          data   = dtrain,
+          nrounds = 300,
           params = list(
-            objective = "reg:squarederror",
-            eta = 0.05, max_depth = 6,
-            subsample = 0.8, colsample_bytree = 0.8
+            objective        = "reg:squarederror",
+            eta              = 0.05,
+            max_depth        = 6,
+            subsample        = 0.8,
+            colsample_bytree = 0.8
           ),
           verbose = 0
         )
@@ -1685,69 +2020,79 @@ run_model <- function(conus_data_input,
     }
     
     # Metrics
-    has_obs <- !is.na(outcome) & !is.na(cv_preds)
-    err <- outcome[has_obs] - cv_preds[has_obs]
-    rmse <- sqrt(mean(err^2))
-    mae <- mean(abs(err))
-    r2 <- 1 - sum(err^2) / sum((outcome[has_obs] - mean(outcome[has_obs]))^2)
+    has_obs  <- !is.na(outcome) & !is.na(cv_preds)
+    err      <- outcome[has_obs] - cv_preds[has_obs]
+    rmse     <- sqrt(mean(err^2))
+    mae      <- mean(abs(err))
+    r2       <- 1 - sum(err^2) / sum((outcome[has_obs] - mean(outcome[has_obs]))^2)
     spearman <- cor(outcome[has_obs], cv_preds[has_obs], method = "spearman")
     
-    thresh <- quantile(outcome[has_obs], hotspot_quantile, na.rm = TRUE)
-    actual_hot <- outcome[has_obs] >= thresh
-    pred_hot <- cv_preds[has_obs] >= thresh
+    thresh      <- quantile(outcome[has_obs], hotspot_quantile, na.rm = TRUE)
+    actual_hot  <- outcome[has_obs] >= thresh
+    pred_hot    <- cv_preds[has_obs] >= thresh
     hotspot_acc <- mean(actual_hot == pred_hot, na.rm = TRUE)
     
-    # Final full model
+    # Final full model on all data
     full_valid <- complete.cases(preds_df) & !is.na(outcome)
-    full_x <- preds_df[full_valid, , drop = FALSE]
-    full_y <- outcome[full_valid]
-    full_w <- weights[full_valid]
+    full_x     <- preds_df[full_valid, , drop = FALSE]
+    full_y     <- outcome[full_valid]
+    full_w     <- weights[full_valid]
     
+    full_medians <- sapply(full_x, median, na.rm = TRUE)
     for (col in names(full_x)) {
-      med_val <- median(full_x[[col]], na.rm = TRUE)
-      full_x[[col]][is.na(full_x[[col]])] <- med_val
+      full_x[[col]][is.na(full_x[[col]])] <- full_medians[[col]]
     }
     
     if (model_type == "rf") {
       final_fit <- randomForest::randomForest(
-        x = full_x, y = full_y,
-        ntree = 1000,
-        mtry = max(1, floor(ncol(full_x) / 3)),
+        x         = full_x,
+        y         = full_y,
+        ntree     = 1000,
+        mtry      = max(1, floor(ncol(full_x) / 3)),
         importance = TRUE,
-        weights = full_w
+        weights   = full_w
       )
     }
     
     if (model_type == "xgb") {
       dtrain_full <- xgboost::xgb.DMatrix(
-        data = as.matrix(full_x), label = full_y, weight = full_w
+        data   = as.matrix(full_x),
+        label  = full_y,
+        weight = full_w
       )
       final_fit <- xgboost::xgb.train(
-        data = dtrain_full, nrounds = 300,
-        params = list(
-          objective = "reg:squarederror",
-          eta = 0.05, max_depth = 6,
-          subsample = 0.8, colsample_bytree = 0.8
+        data    = dtrain_full,
+        nrounds = 300,
+        params  = list(
+          objective        = "reg:squarederror",
+          eta              = 0.05,
+          max_depth        = 6,
+          subsample        = 0.8,
+          colsample_bytree = 0.8
         ),
         verbose = 0
       )
     }
     
     list(
-      compound = compound,
-      skipped = FALSE,
-      actual = outcome,
-      predicted = cv_preds,
-      source = conus_data_input$source,
-      r2 = r2, rmse = rmse, mae = mae,
-      spearman = spearman,
+      compound    = compound,
+      skipped     = FALSE,
+      actual      = outcome,
+      predicted   = cv_preds,
+      source      = conus_data_input$dataset_source,
+      r2          = r2,
+      rmse        = rmse,
+      mae         = mae,
+      spearman    = spearman,
       hotspot_acc = hotspot_acc,
       final_model = final_fit
     )
   }
   
-  # Unpack results
-  cv_results <- list()
+  # ==============================================
+  # UNPACK RESULTS
+  # ==============================================
+  cv_results   <- list()
   final_models <- list()
   
   for (res in results_list) {
@@ -1756,43 +2101,48 @@ run_model <- function(conus_data_input,
       cat(res$compound, "skipped (too few observations)\n")
       next
     }
-    compound <- res$compound
+    compound               <- res$compound
     final_models[[compound]] <- res$final_model
-    cv_results[[compound]] <- res[
-      c("actual", "predicted", "source", "r2", "rmse", "mae", "spearman", "hotspot_acc")
+    cv_results[[compound]]   <- res[
+      c("actual", "predicted", "source",
+        "r2", "rmse", "mae", "spearman", "hotspot_acc")
     ]
     cat(
       compound,
-      "| R2 =", round(res$r2, 3),
-      "| RMSE =", round(res$rmse, 3),
-      "| MAE =", round(res$mae, 3),
-      "| Spearman =", round(res$spearman, 3),
-      "| HotspotAcc =", round(res$hotspot_acc, 3),
+      "| R2 =",         round(res$r2,          3),
+      "| RMSE =",       round(res$rmse,         3),
+      "| MAE =",        round(res$mae,          3),
+      "| Spearman =",   round(res$spearman,     3),
+      "| HotspotAcc =", round(res$hotspot_acc,  3),
       "\n"
     )
   }
-  
+
   return(list(
-    cv_results = cv_results,
-    final_models = final_models,
+    cv_results       = cv_results,
+    final_models     = final_models,
     conus_data_input = conus_data_input,
-    preds_df = preds_df,
-    model_type = model_type,
-    suffix = suffix
+    preds_df         = preds_df,
+    spatial_folds    = spatial_folds,   # returned so you can map the blocks
+    model_type       = model_type,
+    suffix           = suffix
   ))
 }
 
+
 #runing model for random forest
 results_all_rf <- run_model(
-  water,
+  conus_data,
   suffix = "all",
   model_type = "rf"
 )
+
 results_all_xgb <- run_model(
-  water,
+  conus_data,
   suffix = "all",
   model_type = "xgb"
 )
+
 #now running ML but only on values above BDL of 0.2
 #since values below detection limit are technically inaccurate
 conus_data_above_BDL <- conus_data %>%
