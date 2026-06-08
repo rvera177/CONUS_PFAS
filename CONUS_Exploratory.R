@@ -1,5 +1,8 @@
+
 #conus 2: back at it
-setwd("C:/Users/Marston User/Documents/CONUS_PFAS")
+getwd()
+setwd("C:/Users/Ruli's computer/OneDrive/Documents/Soil&Water lab/GlobalPFAS")
+
 # ============================================================================
 # PHASE 1, STEP 1: UNIFIED DATA LOADER WITH METADATA TRACKING
 # ============================================================================
@@ -35,7 +38,11 @@ dataset_catalog <- tribble(
   "AustraliaMap_2026",  "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/Australia_Government_PFAS_CHEM_MAP_Clean.csv", "Australia",
   "Woodward_2026",     "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/Woodward_et_al_California_2026.csv", "USA",
   "MA_PWS_2026", "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/MassachusettsSurfaceWaterSupply_PFAS_Cleaned.csv", "USA",
-  "Petre_2022", "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/Petre_et_al_2022_North_Carolina.csv", "USA")
+  "Michigan_MPART_2026", "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/Michican_MPART_PFAS_Final.csv", "USA",
+  "Petre_2022", "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/Petre_et_al_2022_North_Carolina.csv", "USA",
+  "NC_Neuse_2020", "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/North_Carolina_DWR_NeuseBasin_2020_clean.csv", "USA",
+  "MassDEP_2024", "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/MassDEP2024.csv", "USA",
+  "Beisner_2025", "https://raw.githubusercontent.com/rvera177/GlobalPFAS/refs/heads/main/data/complete/Beisner_2025_NewMexico_cleaned.csv", "USA")
 
 # PFAS compounds to standardize across all datasets
 all_pfas <- c(
@@ -138,8 +145,6 @@ load_and_standardize <- function(dataset_name, url, expected_region) {
 }
 
 # Load all datasets
-cat("LOADING ALL DATASETS\n")
-
 all_data_list <- mapply(
   load_and_standardize,
   dataset_name = dataset_catalog$dataset_name,
@@ -164,13 +169,12 @@ print(global_pfas_raw %>%
         summarise(n_obs = n(), .groups = "drop") %>%
         arrange(desc(n_obs)))
 
-cat("\n")
 # Count unique sites by unique coordinate pairs
 unique_global_sites <- global_pfas_raw %>%
   distinct(Latitude, Longitude) %>%
   nrow()
 
-cat("Total unique sites (unique coordinate pairs):", unique_sites, "\n\n")
+cat("Total unique sites (unique coordinate pairs):", unique_global_sites, "\n\n")
 
 # Breakdown of unique sites per dataset
 cat("Unique sites by dataset:\n")
@@ -317,15 +321,8 @@ print(global_pfas_regional %>%
           .groups = "drop"
         ))
 
-# ============================================================================
-# SAVE FOR NEXT PHASE
-# ============================================================================
-
+#------------ Data visualization----------------
 library(tidyverse)
-saveRDS(global_pfas_regional, "global_pfas_regional.rds")
-
-cat("\n✓ Saved: global_pfas_regional.rds\n")
-cat("Ready for Phase 1 visualization!\n")
 
 #filtering the data for NH outliers
 conus_data <- global_pfas_regional %>%
@@ -363,7 +360,7 @@ cat("Rows retained (rows aren't dropped, outlier values set to NA):", nrow(conus
 
 # Then use conus_data_filtered going forward
 conus_data <- conus_data_filtered
-
+saveRDS(conus_data, file = "conus_data.rds")
 unique_conus_sites <- conus_data %>%
   distinct(Latitude, Longitude)
 
@@ -449,10 +446,6 @@ cat("\nTop 10 Detected Compounds in CONUS:\n")
 print(compound_detection %>% head(10))
 
 #------------DB SCAN ----------------------
-library(dbscan)
-
-cat("DB SCAN Clustering (Metadata + Concentrations)\n")
-
 # Top 5 compounds by detection frequency
 top_compounds <- compound_detection %>% head(5) %>% pull(compound)
 cat("Top compounds:", paste(top_compounds, collapse = ", "), "\n")
@@ -492,7 +485,7 @@ d2    <- diff(d1)
 elbow <- which.max(d2) + 1
 suggested_eps <- knn_k[elbow]
 
-# Zoom into the bottom 90% of the curve where the real elbow is
+# Zoom into the bottom 90% of the curve where the elbow is
 p_knn_zoom <- ggplot(
   data.frame(rank = seq_along(knn_k), dist = knn_k) %>%
     filter(dist < 3),    # zoom to distances < 3
@@ -551,9 +544,9 @@ eps_comparison <- lapply(eps_candidates, function(e) {
 
 print(eps_comparison)
 #aiming for 5-10 clusters and 5-15% noise. 
-#Therefore, going to proceed with epsilon=0.75
+#Therefore, going to proceed with epsilon=0.5
 
-working_eps <- 0.75
+working_eps <- 0.5
 # DB Scan STEP 2: RUN DBSCAN WITH SUGGESTED EPSILON
 
 eps_use  <- working_eps
@@ -570,13 +563,6 @@ dbscan_data$cluster <- db$cluster
 n_clusters <- length(unique(db$cluster[db$cluster > 0]))
 # DB Scan STEP 3: SPATIAL VISUALIZATION
 # Now lat/lon are only used for plotting, not for clustering
-
-# Update epsilon and rerun clustering
-eps_use    <- 0.75
-minPts_use <- 5
-db         <- dbscan(dbscan_scaled, eps = eps_use, minPts = minPts_use)
-dbscan_data$cluster <- db$cluster
-n_clusters <- length(unique(db$cluster[db$cluster > 0]))
 
 # ---- Updated KNN plot: zoomed + all candidates marked ----
 eps_candidates <- c(0.3, 0.5, 0.75, 1.0, 1.5, 2.0)
@@ -621,6 +607,7 @@ p_knn_final <- ggplot(
         plot.subtitle = element_text(size = 10, color = "grey30"))
 
 p_knn_final
+#the number of clusters is incorrect here.
 ggsave("04a_dbscan_knn_final.png", p_knn_final, width = 11, height = 6, dpi = 300)
 cat("✓ Saved: 04a_dbscan_knn_final.png\n")
 
